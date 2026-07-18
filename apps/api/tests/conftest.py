@@ -134,18 +134,27 @@ def client(_schema):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip local-dev-auth tests when running against Postgres."""
+    """Apply the backend-specific skips."""
     if IS_SQLITE:
-        return
-    skip = pytest.mark.skip(
-        reason=(
-            "sqlite_only: exercises local password auth, which inserts "
-            "directly into profiles — forbidden by the auth.users foreign key "
-            "on the Supabase schema"
+        skip = pytest.mark.skip(
+            reason=(
+                "postgres_only: needs real row locking (SELECT ... FOR "
+                "UPDATE); SQLAlchemy omits it on SQLite"
+            )
         )
-    )
+        marker = "postgres_only"
+    else:
+        skip = pytest.mark.skip(
+            reason=(
+                "sqlite_only: exercises local password auth, which inserts "
+                "directly into profiles — forbidden by the auth.users foreign "
+                "key on the Supabase schema"
+            )
+        )
+        marker = "sqlite_only"
+
     for item in items:
-        if "sqlite_only" in item.keywords:
+        if marker in item.keywords:
             item.add_marker(skip)
 
 

@@ -49,6 +49,19 @@ against the limit. A job retries up to `JOB_MAX_ATTEMPTS`; on terminal failure
 the debit is refunded, since the work never happened. Terminal jobs drop their
 frames payload — by far the largest column, and useless afterwards.
 
+**Metering.** Two allowances per month: minutes and analyses. Minutes are
+debited at enqueue and refunded if the job ultimately fails, so the refund is
+guarded by the usage period it was debited in. The analysis credit is charged
+only when a job succeeds — a user is never billed for a report they did not
+receive, and there is nothing to refund. Because nothing is reserved, the
+enqueue check counts jobs already in flight toward the allowance; otherwise
+several concurrent submissions would each pass the check and overshoot.
+
+Quota checks, the minutes debit and the insert all run in one transaction
+holding `SELECT ... FOR UPDATE` on the user row, which serialises submissions
+per user — the scope of every limit involved. SQLite has no row locks, so the
+dev backend is best-effort; `make test-api-pg` covers the real behaviour.
+
 **Triggering.** The runner needs something to call it. Vercel Cron is capped
 at once per minute (and once per *day* on Hobby), so queue latency is bounded
 by whatever schedules it. A long-running host can set `JOB_RUN_INLINE=true`

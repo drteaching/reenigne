@@ -84,19 +84,51 @@ def reset_usage_if_needed(user: User) -> None:
     if user.usage_month != month:
         user.usage_month = month
         user.minutes_used_month = 0.0
+        user.analyses_used_month = 0
 
 
-def require_quota_remaining(user: User, settings: Settings) -> None:
+def quota_rejection(
+    user: User, settings: Settings, *, in_flight_analyses: int = 0
+) -> str | None:
     """
-    Reject before doing billable work. Callers must have already run
-    reset_usage_if_needed so a new month starts from zero.
+    Which limit, if any, blocks more work right now. None if within quota.
+
+    `in_flight_analyses` counts queued/running jobs. The analysis credit is
+    charged on success, not reserved at enqueue, so without counting work
+    already in flight a user at limit-1 could submit several jobs that each
+    pass the check and collectively overshoot.
+
+    Callers must have run reset_usage_if_needed first so a new month starts
+    from zero.
     """
     if user.minutes_used_month >= settings.pro_minutes_per_month:
+        return (
+            f"Monthly quota exhausted "
+            f"({user.minutes_used_month:.1f}/{settings.pro_minutes_per_month} "
+            f"minutes). Resets at the start of next month."
+        )
+
+    used = user.analyses_used_month + in_flight_analyses
+    if used >= settings.pro_analyses_per_month:
+        in_flight_note = (
+            f" ({in_flight_analyses} in progress)" if in_flight_analyses else ""
+        )
+        return (
+            f"Monthly analyses quota exhausted "
+            f"({user.analyses_used_month}/{settings.pro_analyses_per_month} "
+            f"analyses{in_flight_note}). Resets at the start of next month."
+        )
+    return None
+
+
+def require_quota_remaining(
+    user: User, settings: Settings, *, in_flight_analyses: int = 0
+) -> None:
+    """Reject before doing billable work, naming the limit that was hit."""
+    rejection = quota_rejection(
+        user, settings, in_flight_analyses=in_flight_analyses
+    )
+    if rejection:
         raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail=(
-                f"Monthly quota exhausted "
-                f"({user.minutes_used_month:.1f}/{settings.pro_minutes_per_month} "
-                f"minutes). Resets at the start of next month."
-            ),
+            status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=rejection
         )

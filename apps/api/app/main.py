@@ -23,8 +23,7 @@ from .auth import (
 from .config import Settings, get_settings
 from .db import User, get_session, get_user_by_email, init_db, new_local_user_id
 from .jobs import (
-    count_active_jobs,
-    create_job,
+    enqueue_analysis,
     get_job,
     list_jobs,
     run_job_by_id,
@@ -84,6 +83,8 @@ class MeResponse(BaseModel):
     plan: str
     minutes_used_month: float
     minutes_limit: int
+    analyses_used_month: int
+    analyses_limit: int
     max_frames_per_session: int
 
 
@@ -192,6 +193,8 @@ async def me(
         plan=user.plan,
         minutes_used_month=user.minutes_used_month,
         minutes_limit=settings.pro_minutes_per_month,
+        analyses_used_month=user.analyses_used_month,
+        analyses_limit=settings.pro_analyses_per_month,
         max_frames_per_session=settings.pro_max_frames_per_session,
     )
 
@@ -357,43 +360,29 @@ async def submit_analysis_job(
     standalone runner (python -m app.runner_loop) instead.
     """
     require_active_subscription(user)
-    reset_usage_if_needed(user)
-    require_quota_remaining(user, settings)
 
     if not body.frames:
         raise HTTPException(status_code=400, detail="No frames supplied")
 
-    # NOTE: this count-then-insert is racy — concurrent submits by the same
-    # user can both pass it. Closed in the following commit by taking a row
-    # lock on the user inside the enqueue transaction.
-    active = await count_active_jobs(session, str(user.id))
-    if active >= settings.job_max_active_per_user:
-        raise HTTPException(
-            status_code=429,
-            detail=(
-                f"You already have {active} analyses in progress "
-                f"(limit {settings.job_max_active_per_user}). "
-                "Wait for one to finish."
-            ),
-        )
-
     frames = _downsample_frames(body.frames, settings.pro_max_frames_per_session)
 
-    # Debit at enqueue so queued work counts against quota; refunded by the
-    # runner if the job ultimately fails.
-    cost = _analysis_cost_minutes(body.duration_seconds)
-    user.minutes_used_month += cost
-
-    job = await create_job(
+    # Quota checks, the minutes debit and the insert all happen inside one
+    # transaction holding a row lock on the user, so concurrent submissions
+    # cannot both slip past a limit.
+    job, rejection = await enqueue_analysis(
         session,
         user=user,
+        settings=settings,
         target=body.target,
         duration_seconds=body.duration_seconds,
         prompt_template=body.prompt_template,
         model=body.model or settings.default_model,
         frames=[f.model_dump() for f in frames],
-        charged_minutes=cost,
     )
+    if rejection is not None:
+        raise HTTPException(
+            status_code=rejection.status_code, detail=rejection.detail
+        )
 
     if settings.job_run_inline:
         await run_job_by_id(settings, job.id)

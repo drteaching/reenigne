@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Float, NullPool, String, Uuid, select, text
+from sqlalchemy import DateTime, Float, Integer, NullPool, String, Uuid, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -41,6 +41,9 @@ class User(Base):
     subscription_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     plan: Mapped[str] = mapped_column(String(64), default="free")
     minutes_used_month: Mapped[float] = mapped_column(Float, default=0.0)
+    # Completed analyses this period. Charged on success, never reserved, so
+    # this only ever counts work the user actually received.
+    analyses_used_month: Mapped[int] = mapped_column(Integer, default=0)
     usage_month: Mapped[str] = mapped_column(String(7), default="")
 
 

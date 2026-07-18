@@ -9,6 +9,8 @@ type Me = {
   plan: string;
   minutes_used_month: number;
   minutes_limit: number;
+  analyses_used_month: number;
+  analyses_limit: number;
 };
 
 function formatTimer(seconds: number) {
@@ -320,8 +322,11 @@ export default function App() {
                     Signed in as <strong>{me.email || email}</strong>
                   </p>
                   <p className="muted">
-                    Plan: {me.plan} · {me.subscription_status} ·{" "}
-                    {me.minutes_used_month.toFixed(1)} / {me.minutes_limit} min this month
+                    Plan: {me.plan} · {me.subscription_status}
+                  </p>
+                  <p className="muted">
+                    This month: {me.analyses_used_month} / {me.analyses_limit} analyses ·{" "}
+                    {me.minutes_used_month.toFixed(1)} / {me.minutes_limit} min
                   </p>
                   <div className="row" style={{ marginTop: 16 }}>
                     {!subscribed && (

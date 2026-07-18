@@ -265,6 +265,10 @@ def test_success_clears_payload_and_keeps_charge(portal, client, monkeypatch):
         async with SessionLocal() as s:
             u = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
             u.minutes_used_month = 5.0
+            # complete_job applies the month rollover before charging the
+            # analysis credit, so the period must be current or the reset
+            # would zero this.
+            u.usage_month = datetime.now(timezone.utc).strftime("%Y-%m")
             await s.commit()
 
     portal.call(_charge)

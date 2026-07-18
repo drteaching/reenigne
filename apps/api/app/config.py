@@ -54,6 +54,7 @@ class Settings(BaseSettings):
 
     # Entitlements
     pro_minutes_per_month: int = 300
+    pro_analyses_per_month: int = 30
     pro_max_frames_per_session: int = 60
     max_audio_upload_bytes: int = 100 * 1024 * 1024
 

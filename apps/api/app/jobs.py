@@ -17,7 +17,7 @@ import json
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from sqlalchemy import (
     DateTime,
@@ -34,6 +34,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .config import Settings
 from .db import Base, SessionLocal, User, is_uuid
+from .stripe_billing import quota_rejection, reset_usage_if_needed
+
+class EnqueueRejection(NamedTuple):
+    """Why a submission was refused, and the HTTP status that fits it."""
+
+    status_code: int
+    detail: str
+
 
 # Terminal states never transition again.
 STATUS_QUEUED = "queued"
@@ -68,10 +76,14 @@ class AnalysisJob(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     # Minutes debited at enqueue, refunded if the job ultimately fails.
     charged_minutes: Mapped[float] = mapped_column(Float, default=0.0)
-    # Usage period the debit belongs to. A refund is only valid against the
-    # same period: the monthly reset zeroes the counter, so refunding a job
-    # enqueued last month would credit minutes that were never spent.
+    # Usage period the minutes debit belongs to. A refund is only valid
+    # against the same period: the monthly reset zeroes the counter, so
+    # refunding a job enqueued last month would credit minutes never spent.
     usage_month: Mapped[str] = mapped_column(String(7), default="")
+    # Analysis credits charged on completion. Unlike minutes this is not
+    # reserved at enqueue, so there is nothing to refund on failure — it stays
+    # 0 unless the job succeeded.
+    charged_analyses: Mapped[int] = mapped_column(Integer, default=0)
 
     # Epoch seconds, not DateTime: SQLite hands back naive datetimes and
     # comparing those to tz-aware ones raises. Epoch floats compare correctly
@@ -144,6 +156,96 @@ async def create_job(
     await session.commit()
     await session.refresh(job)
     return job
+
+
+async def enqueue_analysis(
+    session: AsyncSession,
+    *,
+    user: User,
+    settings: Settings,
+    target: str,
+    duration_seconds: float,
+    prompt_template: str,
+    model: str,
+    frames: list[dict[str, Any]],
+) -> tuple[AnalysisJob | None, EnqueueRejection | None]:
+    """
+    Check quota and caps, debit minutes, and insert the job — atomically.
+
+    Returns (job, None) on success or (None, reason) when rejected.
+
+    Everything happens in one transaction that begins by taking a row lock on
+    the user. Without the lock this is a check-then-insert race: under READ
+    COMMITTED two concurrent submissions each evaluate the counts against
+    their own snapshot, neither sees the other's uncommitted insert, and both
+    are admitted. Carrying the count inside the INSERT's WHERE clause does not
+    help for the same reason — it was tried, and admitted both.
+
+    Locking the user row serialises submissions per user, which is exactly the
+    scope of every limit here: minutes, analyses, and the active-job cap. It
+    also makes the minutes debit a safe read-modify-write.
+
+    SQLite has no row locks and SQLAlchemy omits FOR UPDATE there, so on the
+    dev backend this degrades to best effort. Acceptable: SQLite serialises
+    writers anyway, and production is Postgres.
+    """
+    # populate_existing is essential, not decoration. The caller's dependency
+    # has usually already loaded this user into the session, and by default
+    # SQLAlchemy returns that cached instance for a repeat primary-key select
+    # — so the lock would be taken while the in-memory counters stayed at
+    # their pre-lock values, and the read-modify-write below would silently
+    # lose the other transaction's debit.
+    locked_user = (
+        await session.execute(
+            select(User)
+            .where(User.id == str(user.id))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if locked_user is None:
+        return None, EnqueueRejection(404, "User not found")
+
+    # Re-apply the rollover against the locked row: the reset and the debit
+    # must land in the same transaction.
+    reset_usage_if_needed(locked_user)
+
+    active = await count_active_jobs(session, str(locked_user.id))
+    if active >= settings.job_max_active_per_user:
+        await session.rollback()
+        return None, EnqueueRejection(
+            429,
+            f"You already have {active} analyses in progress "
+            f"(limit {settings.job_max_active_per_user}). "
+            "Wait for one to finish.",
+        )
+
+    rejection = quota_rejection(
+        locked_user, settings, in_flight_analyses=active
+    )
+    if rejection:
+        await session.rollback()
+        return None, EnqueueRejection(402, rejection)
+
+    charged_minutes = max(duration_seconds / 60.0 * 0.1, 0.1)
+    locked_user.minutes_used_month += charged_minutes
+
+    job = AnalysisJob(
+        id=str(uuid.uuid4()),
+        user_id=str(locked_user.id),
+        status=STATUS_QUEUED,
+        target=target,
+        duration_seconds=duration_seconds,
+        prompt_template=prompt_template,
+        model=model,
+        request_json=json.dumps({"frames": frames}),
+        charged_minutes=charged_minutes,
+        usage_month=locked_user.usage_month,
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+    return job, None
 
 
 async def get_job(
@@ -261,6 +363,30 @@ async def complete_job(
     features: dict,
     model_used: str,
 ) -> None:
+    """
+    Mark the job succeeded and charge the analysis credit.
+
+    The credit is spent here rather than reserved at enqueue, so a user is
+    only ever billed for a report they actually received. It counts against
+    the period in which the job *finished*: that is the live counter, and a
+    job carried across a month boundary would otherwise charge a period that
+    has already been reset.
+    """
+    locked_user = (
+        await session.execute(
+            select(User)
+            .where(User.id == job.user_id)
+            .with_for_update()
+            # See enqueue_analysis: without this the identity map can hand
+            # back a stale instance and the increment is lost.
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if locked_user is not None:
+        reset_usage_if_needed(locked_user)
+        locked_user.analyses_used_month += 1
+        job.charged_analyses = 1
+
     job.status = STATUS_SUCCEEDED
     job.result_markdown = markdown
     job.result_features_json = json.dumps(features)
