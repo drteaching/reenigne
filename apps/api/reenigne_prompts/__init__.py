@@ -1,4 +1,20 @@
-"""Analysis prompt templates (server-side)."""
+"""
+Analysis prompt templates — the single source of truth.
+
+The prompts are the product, so the paid server path and the worker's local
+dev path must never resolve different text for the same template name. This
+module is the only definition; both consumers import it.
+
+Deliberately dependency-free. The worker installs it as a standalone
+distribution (see the pyproject.toml beside this package) so it can be
+imported without dragging in FastAPI, SQLAlchemy or any provider SDK.
+
+It lives under apps/api because that directory is the Vercel deployment root
+— scripts/deploy-vercel.sh runs `vercel` from inside it, so nothing outside
+apps/api is uploaded. Keeping the canonical copy here means the server keeps
+importing it with no packaging step, no requirements change and no build
+hook. See docs/architecture.md for the full rationale.
+"""
 
 TEARDOWN_PROMPT = """You are a senior product analyst performing a competitive teardown of a software product.
 

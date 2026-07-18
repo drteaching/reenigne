@@ -67,6 +67,35 @@ at once per minute (and once per *day* on Hobby), so queue latency is bounded
 by whatever schedules it. A long-running host can set `JOB_RUN_INLINE=true`
 instead and skip the queue latency entirely.
 
+## Prompt templates
+
+The prompts are the product, so the paid server path and the worker's local
+dev path must never resolve different text for the same template name. There
+is exactly one definition: `apps/api/reenigne_prompts/`, a zero-dependency
+package that both consumers import.
+
+It lives under `apps/api` because that is the Vercel deployment root —
+`scripts/deploy-vercel.sh` runs `vercel` from inside `apps/api`, so nothing
+outside that directory is uploaded. A shared package at `packages/` would have
+been unreachable at runtime without changing how the API deploys. Keeping the
+canonical copy inside the deployment root means the server imports it with no
+packaging step, no `requirements.txt` entry and no build hook.
+
+The worker installs the same directory as a real distribution
+(`pip install -e ../../apps/api`), which is why `apps/api/pyproject.toml`
+exists. That file packages *only* `reenigne_prompts` — never `app`, `api` or
+`tests` — and is listed in `.vercelignore` so it cannot influence the Vercel
+build, which still installs from `requirements.txt`.
+
+Enforcement, so the duplication cannot return:
+
+| Check | Where |
+|-------|-------|
+| Exactly one module defines `PROMPTS` | `apps/api/tests/test_prompt_single_source.py` |
+| Both consumers import from `reenigne_prompts` | same file (AST check) |
+| Each consumer resolves the *same object* | both suites — identity, so text cannot diverge |
+| Package stays dependency-free | both suites |
+
 ## Packages
 
 | Path | Role |

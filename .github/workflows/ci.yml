@@ -14,6 +14,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # The canonical prompts live with the server (apps/api is the Vercel
+      # deployment root). Install that zero-dependency package first; the
+      # worker declares it as `reenigne-prompts`, which is not on PyPI.
+      - name: Install shared prompts
+        run: pip install -e ./apps/api
       - name: Install
         working-directory: packages/worker
         run: pip install -e ".[dev]"
@@ -56,6 +61,9 @@ jobs:
       - name: Install
         working-directory: apps/api
         run: pip install -r requirements-dev.txt
+      - name: Lint
+        working-directory: apps/api
+        run: ruff check app reenigne_prompts api tests
       - name: Test
         working-directory: apps/api
         env:

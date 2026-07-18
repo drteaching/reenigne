@@ -1,0 +1,29 @@
+# Packaging metadata for the shared prompt templates ONLY.
+#
+# This exists so packages/worker can install the canonical prompts as a real
+# distribution (`pip install -e ../../apps/api`) and import them without
+# pulling in FastAPI, SQLAlchemy or any provider SDK.
+#
+# It is NOT how the API itself is built or deployed. Vercel installs from
+# requirements.txt, and this file is listed in .vercelignore so the build
+# never even sees it — adding it cannot change the deployment.
+#
+# `packages` is pinned explicitly so `app`, `api` and `tests` are never
+# swept into the distribution.
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reenigne-prompts"
+version = "0.2.0"
+description = "Canonical LLM prompt templates shared by the reenigne API and worker."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# Intentionally empty: the whole point is that this imports anywhere.
+dependencies = []
+
+[tool.setuptools]
+packages = ["reenigne_prompts"]

@@ -21,7 +21,6 @@ from app.jobs import (
     STATUS_SUCCEEDED,
     AnalysisJob,
     create_job,
-    fail_job,
     run_one_job,
 )
 from conftest import make_user

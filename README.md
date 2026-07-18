@@ -44,6 +44,9 @@ For local testing, set `ENABLE_DEV_ENDPOINTS=true` and call `POST /v1/dev/activa
 ### 2. Worker / CLI
 
 ```bash
+# Canonical prompt templates, shared with the server (not published to PyPI).
+pip install -e ./apps/api
+
 cd packages/worker
 pip install -e ".[dev]"
 export REENIGNE_API_URL=http://localhost:8000

@@ -21,6 +21,10 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
+  # Canonical prompt templates. Zero-dependency package living at
+  # apps/api/reenigne_prompts (see that pyproject for why it lives there).
+  # Install for local dev with:  pip install -e ../../apps/api
+  "reenigne-prompts",
   "click>=8.1",
   "httpx>=0.27",
   "Pillow>=10.0",

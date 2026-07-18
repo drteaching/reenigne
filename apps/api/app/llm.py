@@ -8,8 +8,9 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from reenigne_prompts import PROMPTS
+
 from .config import Settings
-from .prompts import PROMPTS
 
 # Providers are called from async request handlers, so every client here must
 # be the async variant — a sync client blocks the whole event loop for the

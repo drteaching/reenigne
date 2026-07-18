@@ -7,10 +7,11 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
+from reenigne_prompts import PROMPTS
+
 from ..cloud import CloudClient, encode_frame_image
 from ..config import Config
 from ..models.session import Session
-from .prompts import PROMPTS
 
 
 # Serverless platforms cap request bodies (Vercel: 4.5 MB). Leave headroom for
