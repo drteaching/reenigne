@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Annotated, Any
@@ -347,6 +348,13 @@ async def submit_analysis_job(
 
     The provider call runs out of band, so neither the request duration nor
     the serverless execution limit bounds how long analysis may take.
+
+    Exception: with JOB_RUN_INLINE=true this call blocks for the *entire*
+    analysis — minutes — and returns only once the job is terminal. That
+    defeats the purpose of the queue and exists purely so local development
+    needs no separate runner process. It is dev-only: never enable it on a
+    platform with a request timeout. For a long-running host use the
+    standalone runner (python -m app.runner_loop) instead.
     """
     require_active_subscription(user)
     reset_usage_if_needed(user)
@@ -443,7 +451,10 @@ async def run_jobs(
     if not secrets.compare_digest(supplied, settings.job_runner_secret):
         raise HTTPException(status_code=401, detail="Invalid runner credentials")
 
-    return await run_pending_jobs(settings)
+    # Budget measured from now — this request IS the invocation, so the
+    # platform's execution clock starts here.
+    deadline = time.monotonic() + settings.job_runner_max_seconds
+    return await run_pending_jobs(settings, deadline=deadline)
 
 
 @app.post("/v1/analyze", response_model=AnalyzeResponse, deprecated=True)

@@ -65,14 +65,29 @@ class Settings(BaseSettings):
     # Shared secret for POST /v1/internal/jobs/run, called by Vercel Cron or
     # an external scheduler. Without it the trigger endpoint is disabled.
     job_runner_secret: str = ""
-    # Run the job in-process straight after enqueue. Correct for local dev and
-    # long-running hosts; useless on serverless, where the process is frozen
-    # once the response is sent.
+    # Run the job in-process straight after enqueue. DEV ONLY: the submit
+    # request then blocks for the whole analysis. On a long-running host use
+    # the standalone runner (python -m app.runner_loop) instead.
     job_run_inline: bool = False
     # How long a runner may hold a job before another may reclaim it. Must
     # exceed the slowest realistic provider call.
     job_lease_seconds: int = 900
     job_max_attempts: int = 3
+
+    # Jobs per runner invocation. One by default: on a platform with a hard
+    # execution cap, draining several sequentially makes an overrun near
+    # certain, and a killed invocation has already spent provider tokens that
+    # the retry spends again. Raise only on a long-running host.
+    job_runner_batch_size: int = 1
+    # Assumed invocation budget. Keep below the platform's maxDuration so the
+    # runner stops itself rather than being killed. Vercel Pro fluid compute
+    # allows 800s; 750 leaves margin for startup and commit.
+    job_runner_max_seconds: int = 750
+    # Runway required before claiming. A job started with less than this is
+    # unlikely to finish, so it would burn spend and be retried anyway.
+    job_min_runway_seconds: int = 300
+    # Idle poll interval for the standalone runner (python -m app.runner_loop).
+    job_runner_idle_sleep_seconds: float = 5.0
     # Per-user cap on queued+running jobs, so one account cannot flood it.
     job_max_active_per_user: int = 3
 

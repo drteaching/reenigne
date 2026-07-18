@@ -404,12 +404,40 @@ async def run_job_by_id(settings: Settings, job_id: str) -> str | None:
         return await _execute_claimed_job(session, job, settings)
 
 
-async def run_pending_jobs(settings: Settings, limit: int = 5) -> dict[str, Any]:
-    """Drain up to `limit` jobs. Returns a summary for the trigger endpoint."""
+async def run_pending_jobs(
+    settings: Settings,
+    limit: int | None = None,
+    deadline: float | None = None,
+) -> dict[str, Any]:
+    """
+    Run jobs until the batch limit, the queue, or the time budget runs out.
+
+    `deadline` is a time.monotonic() value marking the end of the caller's
+    execution window. The runner checks remaining runway before each claim and
+    stops rather than starting work it cannot finish — an invocation killed
+    mid-provider-call has already spent tokens that the retry spends again,
+    and leaves the job to sit until its lease lapses.
+    """
+    limit = settings.job_runner_batch_size if limit is None else limit
+    if deadline is None:
+        deadline = time.monotonic() + settings.job_runner_max_seconds
+
     processed: list[str] = []
+    stopped = "batch_limit"
+
     for _ in range(limit):
+        if deadline - time.monotonic() < settings.job_min_runway_seconds:
+            stopped = "insufficient_runway"
+            break
         job_id = await run_one_job(settings)
         if job_id is None:
+            stopped = "queue_empty"
             break
         processed.append(job_id)
-    return {"processed": len(processed), "job_ids": processed}
+
+    return {
+        "processed": len(processed),
+        "job_ids": processed,
+        "stopped": stopped,
+        "runway_seconds": round(deadline - time.monotonic(), 1),
+    }

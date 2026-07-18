@@ -89,16 +89,34 @@ Point Stripe to:
 
 ## 4b. Analysis job runner
 
-`/v1/analyze/jobs` only enqueues. Something must trigger the runner, or jobs
+`/v1/analyze/jobs` only enqueues. Something must execute the queue, or jobs
 sit in `queued` forever.
 
-Apply the migration:
+Apply the migration first:
 
 ```bash
-supabase db push   # or paste supabase/migrations/20260719_analysis_jobs.sql
+supabase db push   # or paste supabase/migrations/*.sql in filename order
 ```
 
-Then set both of these in Vercel, to the **same** value:
+Pick **one** of three tiers.
+
+### Tier 1 — Local development: inline
+
+```bash
+JOB_RUN_INLINE=true
+```
+
+The submit request runs the analysis in-process and returns only when it
+finishes, so it blocks for **the full duration — minutes**. No runner process
+to manage, which is the entire point. Never use this where requests time out.
+
+### Tier 2 — Vercel: cron trigger
+
+Requires **Vercel Pro**. `apps/api/vercel.json` sets `maxDuration: 800`, the
+fluid-compute maximum; Hobby caps at 300s and its cron fires only **once per
+day**, which makes the queue unusable there.
+
+Set both of these to the **same** value:
 
 | Var | Why |
 |-----|-----|
@@ -109,27 +127,65 @@ Then set both of these in Vercel, to the **same** value:
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-`apps/api/vercel.json` already registers the schedule:
+The schedule is already registered:
 
 ```json
 "crons": [{ "path": "/v1/internal/jobs/run", "schedule": "* * * * *" }]
 ```
 
-Verify it works:
+Verify:
 
 ```bash
 curl -X POST https://api.reenigne.dev/v1/internal/jobs/run \
   -H "X-Job-Runner-Secret: $JOB_RUNNER_SECRET"
-# {"processed": 0, "job_ids": []}
+# {"processed":0,"job_ids":[],"stopped":"queue_empty","runway_seconds":749.9}
 ```
 
-> **Vercel Cron granularity.** Once per minute on Pro; **once per day** on
-> Hobby, which makes the queue unusable there. On Hobby, either point an
-> external scheduler at the same endpoint, or run the API on a long-running
-> host with `JOB_RUN_INLINE=true`.
+Caveats you are accepting:
 
-Leaving `JOB_RUNNER_SECRET` empty makes the endpoint return 404, so an
-unconfigured deploy cannot be drained by anyone who guesses the path.
+- **One job per invocation** (`JOB_RUNNER_BATCH_SIZE=1`). Draining several
+  sequentially inside a capped invocation risks being killed mid-call.
+- **Up to a minute of queue latency**, since cron fires at most once a minute.
+- The runner refuses to claim a job with less than `JOB_MIN_RUNWAY_SECONDS`
+  (default 300) left, so an analysis slower than ~450s can never complete
+  here. It will retry forever and burn spend each time.
+
+### Tier 3 — Recommended: standalone runner
+
+Run the API anywhere, and the runner as a second long-running process with
+the same environment:
+
+```bash
+python -m app.runner_loop
+```
+
+No invocation ceiling, so a provider call cannot be killed part-way through,
+and no queue latency — it picks work up as soon as it lands. On Fly or
+Railway this is a second process in the same app:
+
+```toml
+# fly.toml
+[processes]
+  api    = "uvicorn app.main:app --host 0.0.0.0 --port 8080"
+  runner = "python -m app.runner_loop"
+```
+
+It needs `DATABASE_URL` and the provider keys; it serves no HTTP. Leave
+`JOB_RUN_INLINE` unset and `JOB_RUNNER_SECRET` empty (which makes the trigger
+endpoint 404, so an unconfigured deploy cannot be drained by path-guessing).
+Scale to several runners if needed — claims are atomic, so they will not
+double-serve a job.
+
+### Runner settings
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `JOB_RUNNER_BATCH_SIZE` | `1` | Jobs per invocation. Raise only on tier 3. |
+| `JOB_RUNNER_MAX_SECONDS` | `750` | Assumed invocation budget. Keep under the platform `maxDuration`. |
+| `JOB_MIN_RUNWAY_SECONDS` | `300` | Refuse to claim with less runway than this. |
+| `JOB_LEASE_SECONDS` | `900` | Before a stalled job is reclaimable. Must exceed the slowest provider call. |
+| `JOB_MAX_ATTEMPTS` | `3` | Then the job fails terminally and its quota is refunded. |
+| `JOB_RUNNER_IDLE_SLEEP_SECONDS` | `5` | Tier 3 poll interval when the queue is empty. |
 
 ---
 
