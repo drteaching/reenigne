@@ -94,6 +94,34 @@ def test_migration_declares_uuid(table, column):
     )
 
 
+def test_for_update_is_emitted_on_postgres_and_omitted_on_sqlite():
+    """
+    The enqueue transaction relies on SELECT ... FOR UPDATE to serialise
+    submissions per user. SQLAlchemy silently drops the clause on SQLite
+    rather than erroring, which is why the dev backend is best-effort and the
+    concurrency tests are postgres_only. Asserted rather than assumed: if a
+    future SQLAlchemy started raising instead, every enqueue on SQLite would
+    break, and if Postgres ever stopped emitting it the locking would quietly
+    become a no-op.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.dialects import postgresql, sqlite
+
+    from app.db import User
+
+    stmt = select(User).where(User.id == "x").with_for_update()
+
+    sqlite_sql = str(stmt.compile(dialect=sqlite.dialect())).upper()
+    postgres_sql = str(stmt.compile(dialect=postgresql.dialect())).upper()
+
+    assert "FOR UPDATE" not in sqlite_sql, (
+        "SQLite now emits FOR UPDATE; revisit the best-effort caveat"
+    )
+    assert "FOR UPDATE" in postgres_sql, (
+        "Postgres is not emitting FOR UPDATE — per-user serialisation is a no-op"
+    )
+
+
 def test_profiles_id_stays_uuid_for_the_auth_users_fk():
     """
     profiles.id references auth.users(id), which Supabase defines as uuid.

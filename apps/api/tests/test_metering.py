@@ -205,7 +205,6 @@ def test_success_charges_exactly_one_analysis(portal, ok_provider):
     assert portal.call(_get_job, job_id).status == STATUS_SUCCEEDED
     user = portal.call(_get_user, user_id)
     assert user.analyses_used_month == 5
-    assert portal.call(_get_job, job_id).charged_analyses == 1
 
 
 def test_enqueue_does_not_charge_an_analysis(client, portal, ok_provider):
@@ -215,6 +214,42 @@ def test_enqueue_does_not_charge_an_analysis(client, portal, ok_provider):
 
     assert _submit(client, headers).status_code == 202
     assert portal.call(_get_user, user_id).analyses_used_month == 0
+
+
+def test_retries_never_charge_an_analysis(portal, monkeypatch):
+    """
+    Every retry must increment the counter zero times, not just the terminal
+    attempt. A job that fails three times has produced no report.
+    """
+    settings = get_settings()
+    monkeypatch.setattr(settings, "job_max_attempts", 3)
+
+    attempts = {"n": 0}
+
+    async def _boom(*a, **kw):
+        attempts["n"] += 1
+        raise RuntimeError("provider exploded")
+
+    import app.llm
+
+    monkeypatch.setattr(app.llm, "analyze_with_fallback", _boom)
+
+    _, _, user_id = make_user(f"retry-{uuid.uuid4().hex[:6]}@example.com")
+    portal.call(partial(_set_usage, user_id, minutes=5.0, analyses=2))
+    job_id = portal.call(_enqueue_direct, user_id, 2.0)
+
+    # Attempts 1 and 2 requeue; the third is terminal.
+    for _ in range(3):
+        portal.call(run_one_job, settings)
+        assert portal.call(_get_user, user_id).analyses_used_month == 2, (
+            "a retry charged an analysis credit"
+        )
+
+    assert attempts["n"] == 3
+    assert portal.call(_get_job, job_id).status == STATUS_FAILED
+    user = portal.call(_get_user, user_id)
+    assert user.analyses_used_month == 2
+    assert user.minutes_used_month == pytest.approx(3.0), "minutes not refunded"
 
 
 def test_failure_charges_no_analysis_and_refunds_minutes(portal, monkeypatch):

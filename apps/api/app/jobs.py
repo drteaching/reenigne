@@ -80,10 +80,6 @@ class AnalysisJob(Base):
     # against the same period: the monthly reset zeroes the counter, so
     # refunding a job enqueued last month would credit minutes never spent.
     usage_month: Mapped[str] = mapped_column(String(7), default="")
-    # Analysis credits charged on completion. Unlike minutes this is not
-    # reserved at enqueue, so there is nothing to refund on failure — it stays
-    # 0 unless the job succeeded.
-    charged_analyses: Mapped[int] = mapped_column(Integer, default=0)
 
     # Epoch seconds, not DateTime: SQLite hands back naive datetimes and
     # comparing those to tz-aware ones raises. Epoch floats compare correctly
@@ -385,7 +381,6 @@ async def complete_job(
     if locked_user is not None:
         reset_usage_if_needed(locked_user)
         locked_user.analyses_used_month += 1
-        job.charged_analyses = 1
 
     job.status = STATUS_SUCCEEDED
     job.result_markdown = markdown
