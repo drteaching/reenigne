@@ -1,0 +1,16 @@
+{
+  "name": "reenigne-monorepo",
+  "private": true,
+  "version": "0.2.0",
+  "description": "reenigne — desktop teardown recorder + cloud API + marketing site",
+  "scripts": {
+    "dev:api": "cd apps/api && .venv/bin/uvicorn app.main:app --reload --port 8000",
+    "dev:web": "cd apps/web && npm run dev",
+    "dev:desktop": "cd apps/desktop && npm run electron:dev",
+    "build:web": "cd apps/web && npm run build",
+    "build:desktop": "cd apps/desktop && npm run build",
+    "test:worker": "cd packages/worker && .venv/bin/pytest -q",
+    "test:api": "cd apps/api && .venv/bin/pytest -q",
+    "test": "npm run test:worker && npm run test:api"
+  }
+}

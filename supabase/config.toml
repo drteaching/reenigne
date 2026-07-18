@@ -1,0 +1,22 @@
+# Minimal Supabase project config for local / CLI link
+# https://supabase.com/docs/guides/cli/config
+
+[project]
+id = "reenigne"
+
+[api]
+enabled = true
+port = 54321
+
+[db]
+port = 54322
+major_version = 15
+
+[auth]
+enabled = true
+site_url = "https://reenigne.dev"
+additional_redirect_urls = [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "https://reenigne.dev/**"
+]
