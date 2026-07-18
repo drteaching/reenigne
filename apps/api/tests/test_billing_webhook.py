@@ -176,3 +176,51 @@ def test_unknown_user_is_acked_without_crashing(client, monkeypatch):
     event = _payment_event(f"evt_{uuid.uuid4().hex}", uuid.uuid4())
     _fake_event(monkeypatch, event)
     assert _post(client).status_code == 200
+
+
+def test_unattributable_payment_is_logged_at_error(client, monkeypatch, caplog):
+    """
+    Acking an unattributable payment is right — retrying forever cannot help —
+    but it means money arrived and no credits were granted. That must leave a
+    loud, grep-able trace, or the only record is a stripe_events row nobody
+    reads.
+    """
+    import logging
+
+    event_id = f"evt_{uuid.uuid4().hex}"
+    session_id = f"cs_{uuid.uuid4().hex}"
+    event = _payment_event(event_id, uuid.uuid4())
+    event["data"]["object"]["id"] = session_id
+    _fake_event(monkeypatch, event)
+
+    with caplog.at_level(logging.ERROR, logger="app.billing"):
+        assert _post(client).status_code == 200
+
+    matching = [
+        r for r in caplog.records if "STRIPE_UNATTRIBUTED_PAYMENT" in r.getMessage()
+    ]
+    assert matching, (
+        "no STRIPE_UNATTRIBUTED_PAYMENT record; the marker is what makes this "
+        f"alertable. Saw: {[r.getMessage() for r in caplog.records]}"
+    )
+    record = matching[0]
+    assert record.levelno == logging.ERROR
+    assert event_id in record.getMessage(), "event id missing from the log"
+    assert session_id in record.getMessage(), "session id missing from the log"
+
+
+def test_attributable_payment_logs_no_unattributed_marker(
+    client, portal, monkeypatch, caplog
+):
+    """The marker must stay rare enough to alert on."""
+    import logging
+
+    _, _, user_id = make_user(f"quiet-{uuid.uuid4().hex[:6]}@example.com")
+    _fake_event(monkeypatch, _payment_event(f"evt_{uuid.uuid4().hex}", user_id))
+
+    with caplog.at_level(logging.ERROR, logger="app.billing"):
+        assert _post(client).status_code == 200
+
+    assert not [
+        r for r in caplog.records if "STRIPE_UNATTRIBUTED_PAYMENT" in r.getMessage()
+    ]

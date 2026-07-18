@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -50,6 +51,10 @@ async def lifespan(app: FastAPI):
     await init_db()
     yield
 
+
+# Billing events that need operator attention are logged here so they can be
+# alerted on independently of general request noise.
+billing_log = logging.getLogger("app.billing")
 
 app = FastAPI(title="reenigne API", version="0.2.0", lifespan=lifespan)
 
@@ -302,8 +307,20 @@ async def stripe_webhook(
                 customer_id=customer_id,
             )
             if not granted:
-                # Nothing to credit — but still ack, or Stripe retries a
-                # payment we can never attribute.
+                # Money arrived and no credits were granted. Acking is still
+                # right — retrying cannot attribute it either — but this must
+                # not pass silently, so it is logged loudly enough to alert
+                # on. The marker is deliberately grep-able and should be rare.
+                billing_log.error(
+                    "STRIPE_UNATTRIBUTED_PAYMENT event_id=%s session_id=%s "
+                    "customer_id=%s metadata_user_id=%s — payment succeeded "
+                    "but no matching user was found; credits NOT granted, "
+                    "manual reconciliation required",
+                    event.get("id"),
+                    data.get("id"),
+                    customer_id,
+                    (data.get("metadata") or {}).get("user_id"),
+                )
                 await session.commit()
                 return {"received": True, "unattributed": True}
         elif customer_id:
