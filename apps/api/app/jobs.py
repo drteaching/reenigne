@@ -25,6 +25,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Uuid,
     select,
     update,
 )
@@ -32,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .config import Settings
-from .db import Base, SessionLocal, User
+from .db import Base, SessionLocal, User, is_uuid
 
 # Terminal states never transition again.
 STATUS_QUEUED = "queued"
@@ -45,8 +46,9 @@ TERMINAL_STATUSES = (STATUS_SUCCEEDED, STATUS_FAILED)
 class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    # Native UUID on Postgres, CHAR(32) on SQLite — see User.id.
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), index=True)
     status: Mapped[str] = mapped_column(String(16), default=STATUS_QUEUED, index=True)
 
     target: Mapped[str] = mapped_column(String(512), default="")
@@ -71,7 +73,9 @@ class AnalysisJob(Base):
     # comparing those to tz-aware ones raises. Epoch floats compare correctly
     # on every backend.
     lease_expires_at: Mapped[float] = mapped_column(Float, default=0.0)
-    lock_token: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    lock_token: Mapped[Optional[str]] = mapped_column(
+        Uuid(as_uuid=False), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -141,6 +145,10 @@ async def get_job(
     session: AsyncSession, job_id: str, user_id: str
 ) -> AnalysisJob | None:
     """Scoped to the owner — job ids must not be cross-readable."""
+    # A non-uuid path segment would reach asyncpg and raise; treat it as a
+    # miss so the route answers 404 rather than 500.
+    if not is_uuid(job_id) or not is_uuid(user_id):
+        return None
     result = await session.execute(
         select(AnalysisJob).where(
             AnalysisJob.id == job_id, AnalysisJob.user_id == str(user_id)

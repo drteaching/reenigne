@@ -12,7 +12,7 @@ from passlib.context import CryptContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
-from .db import User, ensure_profile, get_session, get_user_by_id
+from .db import User, ensure_profile, get_session, get_user_by_id, is_uuid
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer = HTTPBearer(auto_error=False)
@@ -71,7 +71,9 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
         )
-    if not user_id:
+    # Subjects are uuids on both auth paths. Anything else is not a real
+    # user, and on Postgres would raise in the driver rather than miss.
+    if not is_uuid(user_id):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token subject",

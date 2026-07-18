@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # Prefer Supabase pooler URI, e.g.
     # postgresql+asyncpg://postgres.[ref]:[password]@aws-0-....pooler.supabase.com:6543/postgres
     database_url: str = "sqlite+aiosqlite:///./reenigne.db"
+    # Force NullPool. Required under asyncpg whenever connections may be used
+    # from more than one event loop (the test suite), since asyncpg binds a
+    # connection to the loop that created it and a pooled reuse from another
+    # loop raises "attached to a different loop".
+    db_null_pool: bool = False
 
     # Provider keys — NEVER ship these to clients
     openai_api_key: str = ""

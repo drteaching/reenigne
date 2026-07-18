@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Optional
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Float, NullPool, String, select, text
+from sqlalchemy import DateTime, Float, NullPool, String, Uuid, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -25,7 +25,10 @@ class User(Base):
 
     __tablename__ = "profiles"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # Native UUID on Postgres (matching the migration and the auth.users FK);
+    # CHAR(32) on SQLite. as_uuid=False keeps the Python side a plain string,
+    # so callers and JSON responses are unchanged.
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     # Only used for local/dev auth (not populated under Supabase Auth)
     password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -66,6 +69,8 @@ _engine_kwargs: dict = {"echo": False}
 if _is_transaction_pooler:
     _engine_kwargs["poolclass"] = NullPool
     _engine_kwargs["connect_args"] = {"statement_cache_size": 0}
+elif _settings.db_null_pool:
+    _engine_kwargs["poolclass"] = NullPool
 else:
     _engine_kwargs["pool_pre_ping"] = True
 
@@ -96,6 +101,8 @@ async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
 
 
 async def get_user_by_id(session: AsyncSession, user_id: str) -> User | None:
+    if not is_uuid(user_id):
+        return None
     result = await session.execute(select(User).where(User.id == str(user_id)))
     return result.scalar_one_or_none()
 
@@ -122,3 +129,22 @@ async def ensure_profile(
 
 def new_local_user_id() -> str:
     return str(uuid4())
+
+
+def is_uuid(value: str | None) -> bool:
+    """
+    True if `value` can be used against a uuid column.
+
+    Required at every boundary that accepts an identifier from outside. On
+    Postgres the driver encodes the parameter as a UUID and raises on
+    anything else, turning an unvalidated path segment or JWT subject into a
+    500. SQLite accepts the same input silently, so this cannot be left to
+    the database to catch.
+    """
+    if not value:
+        return False
+    try:
+        UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True

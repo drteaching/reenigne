@@ -1,5 +1,10 @@
 -- Asynchronous analysis jobs.
 -- Run via Supabase SQL editor or: supabase db push
+--
+-- Filename ordering matters: migrations are applied in lexicographic order,
+-- and this one has a foreign key to public.profiles, so it must sort after
+-- 20260719_profiles.sql. Dated a day later for that reason — a same-day
+-- prefix would sort "analysis_jobs" before "profiles" and fail to apply.
 
 create table if not exists public.analysis_jobs (
   id uuid primary key default gen_random_uuid(),
