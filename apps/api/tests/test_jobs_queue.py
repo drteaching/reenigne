@@ -7,6 +7,7 @@ interesting behaviour is concurrency and failure handling.
 
 import time
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import delete, select
@@ -223,6 +224,10 @@ def test_failure_retries_then_gives_up_and_refunds(portal, client, monkeypatch):
         async with SessionLocal() as s:
             u = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
             u.minutes_used_month = 5.0
+            # The endpoint sets this via reset_usage_if_needed before
+            # enqueueing. A refund is only valid within the period it was
+            # debited, so the job must carry a matching period.
+            u.usage_month = datetime.now(timezone.utc).strftime("%Y-%m")
             await s.commit()
 
     portal.call(_charge)

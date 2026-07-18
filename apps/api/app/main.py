@@ -363,6 +363,9 @@ async def submit_analysis_job(
     if not body.frames:
         raise HTTPException(status_code=400, detail="No frames supplied")
 
+    # NOTE: this count-then-insert is racy — concurrent submits by the same
+    # user can both pass it. Closed in the following commit by taking a row
+    # lock on the user inside the enqueue transaction.
     active = await count_active_jobs(session, str(user.id))
     if active >= settings.job_max_active_per_user:
         raise HTTPException(

@@ -68,6 +68,10 @@ class AnalysisJob(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     # Minutes debited at enqueue, refunded if the job ultimately fails.
     charged_minutes: Mapped[float] = mapped_column(Float, default=0.0)
+    # Usage period the debit belongs to. A refund is only valid against the
+    # same period: the monthly reset zeroes the counter, so refunding a job
+    # enqueued last month would credit minutes that were never spent.
+    usage_month: Mapped[str] = mapped_column(String(7), default="")
 
     # Epoch seconds, not DateTime: SQLite hands back naive datetimes and
     # comparing those to tz-aware ones raises. Epoch floats compare correctly
@@ -134,6 +138,7 @@ async def create_job(
         model=model,
         request_json=json.dumps({"frames": frames}),
         charged_minutes=charged_minutes,
+        usage_month=user.usage_month,
     )
     session.add(job)
     await session.commit()
@@ -294,12 +299,16 @@ async def fail_job(
     job.request_json = None
     job.finished_at = datetime.now(timezone.utc)
 
-    # The work never happened, so the user should not be billed for it.
+    # The work never happened, so the user should not be billed for it —
+    # but only within the period the debit was made. reset_usage_if_needed
+    # zeroes the counter on month rollover, so refunding a job enqueued in an
+    # earlier month would credit minutes that are no longer counted, and
+    # repeated stale failures could drive the counter below what was used.
     if job.charged_minutes:
         user = (
             await session.execute(select(User).where(User.id == job.user_id))
         ).scalar_one_or_none()
-        if user:
+        if user and job.usage_month and job.usage_month == user.usage_month:
             user.minutes_used_month = max(
                 0.0, user.minutes_used_month - job.charged_minutes
             )
