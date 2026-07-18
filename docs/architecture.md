@@ -62,6 +62,29 @@ holding `SELECT ... FOR UPDATE` on the user row, which serialises submissions
 per user — the scope of every limit involved. SQLite has no row locks, so the
 dev backend is best-effort; `make test-api-pg` covers the real behaviour.
 
+**Billing pools.** Two pools fund an analysis, checked in order inside the
+same locked transaction as the insert:
+
+1. **Monthly allowance** (`pro_analyses_per_month`) — charged on *success*, so
+   a failed report costs nothing. Because nothing is reserved, the check
+   counts monthly-funded jobs already in flight; credit-funded ones are
+   excluded, or one job would be charged against both pools.
+2. **Purchased credits** — a finite balance, so it is *reserved at enqueue*
+   and refunded on terminal failure. Credits are not period-scoped: the
+   monthly reset never touches them and the refund carries no month guard,
+   unlike the minutes refund.
+
+Minutes remain only as a secondary abuse guard with generous headroom.
+`analysis_jobs.charged_credits` records which pool paid, so completion and
+refund each return to the right one. A 402 means both pools are empty, and
+points at `/v1/billing/checkout-credits`.
+
+Credit packs are granted by the Stripe webhook, never by the checkout
+endpoint — a session URL only means the user was sent to Stripe. The webhook
+claims each event id in `stripe_events` inside the same transaction as the
+effect, so a replay acks with 200 without repeating it, and a mid-processing
+failure rolls back both so Stripe's retry still lands.
+
 **Triggering.** The runner needs something to call it. Vercel Cron is capped
 at once per minute (and once per *day* on Hobby), so queue latency is bounded
 by whatever schedules it. A long-running host can set `JOB_RUN_INLINE=true`

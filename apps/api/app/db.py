@@ -45,6 +45,9 @@ class User(Base):
     # this only ever counts work the user actually received.
     analyses_used_month: Mapped[int] = mapped_column(Integer, default=0)
     usage_month: Mapped[str] = mapped_column(String(7), default="")
+    # Purchased one-off balance. Not period-scoped: the monthly reset must
+    # never touch it, and a refund is never guarded by a usage month.
+    credits: Mapped[int] = mapped_column(Integer, default=0)
 
 
 def _normalize_database_url(url: str) -> str:

@@ -101,8 +101,8 @@ async def _concurrent_enqueues(user_id: str, n: int):
     return await asyncio.gather(*[_one() for _ in range(n)])
 
 
-def test_concurrent_submits_at_the_last_credit_admit_exactly_one(portal):
-    """Two submissions racing for a single remaining analysis credit."""
+def test_concurrent_submits_at_the_last_monthly_credit_admit_exactly_one(portal):
+    """Two submissions racing for the last slot of the monthly allowance."""
     settings = get_settings()
     _, _, user_id = make_user(f"race-{uuid.uuid4().hex[:6]}@example.com")
     portal.call(partial(_set_usage, user_id, analyses=settings.pro_analyses_per_month - 1
@@ -150,3 +150,61 @@ def test_concurrent_submits_debit_minutes_exactly_once_each(portal):
     assert user.minutes_used_month == pytest.approx(expected), (
         "minutes debits were lost to a concurrent write"
     )
+
+
+async def _set_credits(user_id, analyses, credits):
+    from datetime import datetime, timezone
+
+    async with SessionLocal() as s:
+        u = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
+        u.analyses_used_month = analyses
+        u.credits = credits
+        u.minutes_used_month = 0.0
+        u.usage_month = datetime.now(timezone.utc).strftime("%Y-%m")
+        await s.commit()
+
+
+def test_concurrent_submits_at_the_last_purchased_credit_admit_exactly_one(portal):
+    """
+    Two submissions racing for a single remaining credit.
+
+    The credit check and its decrement sit inside the same FOR UPDATE
+    transaction as the job insert, so the loser must see the balance already
+    spent. Without that lock both would read credits=1 and both would be
+    admitted, overdrawing a purchased balance.
+    """
+    settings = get_settings()
+    _, _, user_id = make_user(f"credrace-{uuid.uuid4().hex[:6]}@example.com")
+    # Monthly exhausted, exactly one credit left.
+    portal.call(
+        partial(_set_credits, user_id, settings.pro_analyses_per_month, 1)
+    )
+
+    results = portal.call(_concurrent_enqueues, user_id, 2)
+
+    accepted = [job for job, _ in results if job is not None]
+    rejected = [r for job, r in results if job is None]
+    assert len(accepted) == 1, (
+        f"expected exactly one acceptance, got {len(accepted)}"
+    )
+    assert accepted[0].charged_credits == 1
+    assert rejected[0].status_code == 402
+
+    user = portal.call(_get_user, user_id)
+    assert user.credits == 0, f"credit balance overdrawn or unspent: {user.credits}"
+    assert portal.call(_count_jobs, user_id) == 1
+
+
+def test_concurrent_submits_never_overdraw_a_multi_credit_balance(portal):
+    """Five submissions, two credits, monthly exhausted -> exactly two run."""
+    settings = get_settings()
+    _, _, user_id = make_user(f"creddraw-{uuid.uuid4().hex[:6]}@example.com")
+    portal.call(
+        partial(_set_credits, user_id, settings.pro_analyses_per_month, 2)
+    )
+
+    results = portal.call(_concurrent_enqueues, user_id, 5)
+    accepted = [job for job, _ in results if job is not None]
+
+    assert len(accepted) == 2, f"admitted {len(accepted)} on a balance of 2"
+    assert portal.call(_get_user, user_id).credits == 0

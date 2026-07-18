@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SiteNav } from "@/components/SiteNav";
+import { PLAN, PRO_FEATURES } from "@/lib/plans";
 
 export default function PricingPage() {
   return (
@@ -21,6 +22,10 @@ export default function PricingPage() {
               Download the app, record locally, browse sessions. AI pipeline locked until
               you subscribe.
             </p>
+            <p style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
+              Pro includes {PLAN.analysesPerMonth} reports a month, up to{" "}
+              {PLAN.maxFramesPerSession} screenshots each.
+            </p>
             <Link href="/download" className="btn" style={{ marginTop: "1rem" }}>
               Download
             </Link>
@@ -31,11 +36,9 @@ export default function PricingPage() {
               $29 <small>/ month</small>
             </div>
             <ul style={{ color: "var(--muted)", lineHeight: 1.6, paddingLeft: "1.1rem" }}>
-              <li>300 analysis minutes / month</li>
-              <li>Whisper transcription</li>
-              <li>Grok teardown (OpenAI + Claude fallback)</li>
-              <li>Self-contained HTML reports</li>
-              <li>Mac (Intel + Apple Silicon) &amp; Windows</li>
+              {PRO_FEATURES.map((feature) => (
+                <li key={feature}>{feature}</li>
+              ))}
             </ul>
             <Link href="/account" className="btn primary" style={{ marginTop: "1rem" }}>
               Create account &amp; subscribe

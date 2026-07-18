@@ -11,6 +11,7 @@ type Me = {
   minutes_limit: number;
   analyses_used_month: number;
   analyses_limit: number;
+  credits: number;
 };
 
 function formatTimer(seconds: number) {
@@ -325,8 +326,11 @@ export default function App() {
                     Plan: {me.plan} · {me.subscription_status}
                   </p>
                   <p className="muted">
-                    This month: {me.analyses_used_month} / {me.analyses_limit} analyses ·{" "}
-                    {me.minutes_used_month.toFixed(1)} / {me.minutes_limit} min
+                    This month: {me.analyses_used_month} / {me.analyses_limit} reports
+                    {me.credits > 0 && ` · ${me.credits} credit${me.credits === 1 ? "" : "s"}`}
+                  </p>
+                  <p className="muted" style={{ fontSize: "0.8rem" }}>
+                    {me.minutes_used_month.toFixed(0)} / {me.minutes_limit} processing minutes
                   </p>
                   <div className="row" style={{ marginTop: 16 }}>
                     {!subscribed && (

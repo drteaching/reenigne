@@ -34,7 +34,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .config import Settings
 from .db import Base, SessionLocal, User, is_uuid
-from .stripe_billing import quota_rejection, reset_usage_if_needed
+from .stripe_billing import (
+    POOL_CREDIT,
+    reset_usage_if_needed,
+    select_funding_pool,
+)
 
 class EnqueueRejection(NamedTuple):
     """Why a submission was refused, and the HTTP status that fits it."""
@@ -80,6 +84,10 @@ class AnalysisJob(Base):
     # against the same period: the monthly reset zeroes the counter, so
     # refunding a job enqueued last month would credit minutes never spent.
     usage_month: Mapped[str] = mapped_column(String(7), default="")
+    # 1 if a purchased credit funded this job, else 0 (the monthly allowance
+    # did). Doubles as the funding-pool marker: it decides whether completion
+    # charges the monthly counter and whether failure refunds a credit.
+    charged_credits: Mapped[int] = mapped_column(Integer, default=0)
 
     # Epoch seconds, not DateTime: SQLite hands back naive datetimes and
     # comparing those to tz-aware ones raises. Epoch floats compare correctly
@@ -216,8 +224,13 @@ async def enqueue_analysis(
             "Wait for one to finish.",
         )
 
-    rejection = quota_rejection(
-        locked_user, settings, in_flight_analyses=active
+    # Only monthly-funded work holds monthly headroom; credit-funded jobs in
+    # flight have already been paid for out of the other pool.
+    active_monthly = await count_active_jobs(
+        session, str(locked_user.id), monthly_funded_only=True
+    )
+    pool, rejection = select_funding_pool(
+        locked_user, settings, in_flight_monthly=active_monthly
     )
     if rejection:
         await session.rollback()
@@ -225,6 +238,14 @@ async def enqueue_analysis(
 
     charged_minutes = max(duration_seconds / 60.0 * 0.1, 0.1)
     locked_user.minutes_used_month += charged_minutes
+
+    # Credits are a finite purchased balance, so they are reserved here rather
+    # than charged on success — inside the same locked transaction as the
+    # insert, so two concurrent submissions cannot both spend the last one.
+    charged_credits = 0
+    if pool == POOL_CREDIT:
+        locked_user.credits -= 1
+        charged_credits = 1
 
     job = AnalysisJob(
         id=str(uuid.uuid4()),
@@ -237,6 +258,7 @@ async def enqueue_analysis(
         request_json=json.dumps({"frames": frames}),
         charged_minutes=charged_minutes,
         usage_month=locked_user.usage_month,
+        charged_credits=charged_credits,
     )
     session.add(job)
     await session.commit()
@@ -272,13 +294,23 @@ async def list_jobs(
     return list(result.scalars().all())
 
 
-async def count_active_jobs(session: AsyncSession, user_id: str) -> int:
-    result = await session.execute(
-        select(AnalysisJob).where(
-            AnalysisJob.user_id == str(user_id),
-            AnalysisJob.status.in_((STATUS_QUEUED, STATUS_RUNNING)),
-        )
-    )
+async def count_active_jobs(
+    session: AsyncSession, user_id: str, *, monthly_funded_only: bool = False
+) -> int:
+    """
+    Queued or running jobs for this user.
+
+    `monthly_funded_only` restricts the count to jobs the monthly allowance is
+    paying for. The active-job cap wants every in-flight job regardless of
+    funding; the monthly quota check wants only the ones holding its headroom.
+    """
+    conditions = [
+        AnalysisJob.user_id == str(user_id),
+        AnalysisJob.status.in_((STATUS_QUEUED, STATUS_RUNNING)),
+    ]
+    if monthly_funded_only:
+        conditions.append(AnalysisJob.charged_credits == 0)
+    result = await session.execute(select(AnalysisJob).where(*conditions))
     return len(list(result.scalars().all()))
 
 
@@ -380,7 +412,10 @@ async def complete_job(
     ).scalar_one_or_none()
     if locked_user is not None:
         reset_usage_if_needed(locked_user)
-        locked_user.analyses_used_month += 1
+        # A credit-funded job was already paid for at enqueue; charging the
+        # monthly counter too would bill the same report twice.
+        if not job.charged_credits:
+            locked_user.analyses_used_month += 1
 
     job.status = STATUS_SUCCEEDED
     job.result_markdown = markdown
@@ -425,14 +460,26 @@ async def fail_job(
     # zeroes the counter on month rollover, so refunding a job enqueued in an
     # earlier month would credit minutes that are no longer counted, and
     # repeated stale failures could drive the counter below what was used.
-    if job.charged_minutes:
+    if job.charged_minutes or job.charged_credits:
         user = (
-            await session.execute(select(User).where(User.id == job.user_id))
-        ).scalar_one_or_none()
-        if user and job.usage_month and job.usage_month == user.usage_month:
-            user.minutes_used_month = max(
-                0.0, user.minutes_used_month - job.charged_minutes
+            await session.execute(
+                select(User)
+                .where(User.id == job.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
+        ).scalar_one_or_none()
+        if user is not None:
+            # Credits are a purchased balance, not period-scoped: return them
+            # whenever the job dies, regardless of month.
+            if job.charged_credits:
+                user.credits += job.charged_credits
+            # Minutes are period-scoped, so the refund is only valid within
+            # the period the debit was made.
+            if job.charged_minutes and job.usage_month == user.usage_month:
+                user.minutes_used_month = max(
+                    0.0, user.minutes_used_month - job.charged_minutes
+                )
     await session.commit()
     return True
 

@@ -49,12 +49,18 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     stripe_price_id: str = ""
+    # One-off credit pack (mode="payment"). Credits are consumed only after
+    # the monthly allowance is spent.
+    stripe_credit_pack_price_id: str = ""
+    credit_pack_size: int = 10
     stripe_success_url: str = "https://reenigne.dev/account?checkout=success"
     stripe_cancel_url: str = "https://reenigne.dev/pricing?checkout=cancel"
 
-    # Entitlements
-    pro_minutes_per_month: int = 300
+    # Entitlements. Analyses are the product unit and the binding constraint;
+    # minutes are a secondary abuse guard with deliberately generous headroom,
+    # so a normal subscriber never meets them.
     pro_analyses_per_month: int = 30
+    pro_minutes_per_month: int = 1000
     pro_max_frames_per_session: int = 60
     max_audio_upload_bytes: int = 100 * 1024 * 1024
 
@@ -121,6 +127,12 @@ class Settings(BaseSettings):
                     f'python3 -c "import secrets; '
                     f'print(secrets.token_urlsafe(48))"'
                 )
+        if self.stripe_credit_pack_price_id and not self.stripe_secret_key:
+            raise RuntimeError(
+                "Refusing to start: STRIPE_CREDIT_PACK_PRICE_ID is set but "
+                "STRIPE_SECRET_KEY is not. Credit checkout would fail at the "
+                "point of sale, after the user has already committed to buy."
+            )
         if self.enable_dev_endpoints and self.stripe_secret_key:
             raise RuntimeError(
                 "Refusing to start: ENABLE_DEV_ENDPOINTS is on while Stripe is "

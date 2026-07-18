@@ -11,6 +11,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import (
@@ -31,9 +32,12 @@ from .jobs import (
 )
 from .llm import analyze_with_fallback, transcribe_whisper
 from .stripe_billing import (
+    StripeEvent,
     apply_subscription_update,
     create_checkout_session,
+    create_credit_checkout_session,
     create_portal_session,
+    grant_credits,
     require_quota_remaining,
     reset_usage_if_needed,
 )
@@ -85,6 +89,7 @@ class MeResponse(BaseModel):
     minutes_limit: int
     analyses_used_month: int
     analyses_limit: int
+    credits: int
     max_frames_per_session: int
 
 
@@ -195,6 +200,7 @@ async def me(
         minutes_limit=settings.pro_minutes_per_month,
         analyses_used_month=user.analyses_used_month,
         analyses_limit=settings.pro_analyses_per_month,
+        credits=user.credits,
         max_frames_per_session=settings.pro_max_frames_per_session,
     )
 
@@ -210,6 +216,28 @@ async def billing_checkout(
 ):
     try:
         url = await create_checkout_session(session, user, settings)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return CheckoutResponse(url=url)
+
+
+@app.post("/v1/billing/checkout-credits", response_model=CheckoutResponse)
+async def billing_checkout_credits(
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    """
+    One-off credit pack purchase (Stripe mode="payment").
+
+    Credits are granted by the webhook, not here — the session URL only means
+    the user was sent to Stripe, and treating that as payment would hand out
+    credits to anyone who abandoned checkout.
+    """
+    if not settings.stripe_credit_pack_price_id:
+        raise HTTPException(status_code=404, detail="Credit packs are not available")
+    try:
+        url = await create_credit_checkout_session(session, user, settings)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return CheckoutResponse(url=url)
@@ -250,15 +278,40 @@ async def stripe_webhook(
     etype = event["type"]
     data = event["data"]["object"]
 
+    # Replay guard. Stripe redelivers on any non-2xx and on its own schedule,
+    # so every handler below must be applied at most once. Claiming the event
+    # id and applying the effect share one transaction: a mid-processing
+    # failure rolls back the marker too, so Stripe's retry still lands.
+    session.add(StripeEvent(id=str(event["id"]), type=etype))
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        # 200, deliberately. A non-2xx here would make Stripe retry an event
+        # we have already applied — forever.
+        return {"received": True, "duplicate": True}
+
     if etype == "checkout.session.completed":
         customer_id = data.get("customer")
-        sub_id = data.get("subscription")
-        if customer_id:
+        # The same event type fires for subscriptions and one-off payments.
+        if data.get("mode") == "payment":
+            granted = await grant_credits(
+                session,
+                amount=settings.credit_pack_size,
+                user_id=(data.get("metadata") or {}).get("user_id"),
+                customer_id=customer_id,
+            )
+            if not granted:
+                # Nothing to credit — but still ack, or Stripe retries a
+                # payment we can never attribute.
+                await session.commit()
+                return {"received": True, "unattributed": True}
+        elif customer_id:
             await apply_subscription_update(
                 session,
                 customer_id=customer_id,
                 status="active",
-                subscription_id=sub_id,
+                subscription_id=data.get("subscription"),
             )
     elif etype in (
         "customer.subscription.updated",
@@ -276,6 +329,7 @@ async def stripe_webhook(
                 subscription_id=data.get("id"),
             )
 
+    await session.commit()
     return {"received": True}
 
 
