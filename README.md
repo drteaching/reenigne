@@ -84,10 +84,21 @@ Screenshots are downscaled and JPEG-encoded before upload, and the client fits t
 ## Tests
 
 ```bash
-npm test              # worker + api
-npm run test:worker
-npm run test:api
+make test         # worker + api on SQLite
+make test-all     # the above, plus the API suite on real Postgres (needs Docker)
+make test-api-pg  # Postgres only
 ```
+
+The API suite runs against **both** backends, and CI enforces both. SQLite has
+no distinct `uuid` type and silently accepts malformed uuid parameters, so a
+whole class of defect — `operator does not exist: uuid = character varying`,
+driver-level parameter encoding — cannot surface there. The Postgres run
+builds its schema from `supabase/migrations/`, so it exercises the shape
+production actually has.
+
+Tests marked `sqlite_only` cover the local password-auth path, which inserts
+directly into `profiles`; the `auth.users` foreign key forbids that on a
+Supabase deployment. They are skipped automatically on Postgres.
 
 ## Deploy (Supabase + Vercel)
 

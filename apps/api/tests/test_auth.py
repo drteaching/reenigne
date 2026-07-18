@@ -1,10 +1,14 @@
 """Authentication and the subscription gate on paid endpoints."""
 
+import pytest
+
+
 
 def test_health_is_open(client):
     assert client.get("/health").status_code == 200
 
 
+@pytest.mark.sqlite_only
 def test_register_then_login(client):
     creds = {"email": "roundtrip@example.com", "password": "hunter2hunter2"}
     assert client.post("/v1/auth/register", json=creds).status_code == 200
@@ -13,6 +17,7 @@ def test_register_then_login(client):
     assert resp.json()["access_token"]
 
 
+@pytest.mark.sqlite_only
 def test_duplicate_registration_rejected(client, user):
     email, _ = user
     resp = client.post(
@@ -21,6 +26,7 @@ def test_duplicate_registration_rejected(client, user):
     assert resp.status_code == 400
 
 
+@pytest.mark.sqlite_only
 def test_short_password_rejected(client):
     resp = client.post(
         "/v1/auth/register", json={"email": "short@example.com", "password": "abc"}
@@ -28,6 +34,7 @@ def test_short_password_rejected(client):
     assert resp.status_code == 422
 
 
+@pytest.mark.sqlite_only
 def test_wrong_password_rejected(client, user):
     email, _ = user
     resp = client.post(

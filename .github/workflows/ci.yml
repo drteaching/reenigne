@@ -25,8 +25,29 @@ jobs:
         run: pytest -q
 
   api:
-    name: api (python)
+    # Both backends. SQLite has no distinct uuid type and tolerates malformed
+    # uuid parameters, so a Postgres-only class of defect (uuid vs varchar
+    # comparison, driver-level parameter encoding) is invisible to it. The
+    # Postgres run builds its schema from supabase/migrations, so the suite
+    # exercises the shape production actually has.
+    name: api (${{ matrix.backend }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: reenigne_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,6 +58,11 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Test
         working-directory: apps/api
+        env:
+          DATABASE_URL: >-
+            ${{ matrix.backend == 'postgres'
+            && 'postgresql+asyncpg://postgres:postgres@localhost:5432/reenigne_test'
+            || '' }}
         run: pytest -q
 
   web:

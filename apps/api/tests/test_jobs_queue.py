@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 
 from app.config import get_settings
 from app.db import SessionLocal, User
+from conftest import make_user
 from app.jobs import (
     STATUS_FAILED,
     STATUS_QUEUED,
@@ -54,20 +55,15 @@ def clean_queue(client, portal):
     yield
 
 
-async def _make_user(email: str) -> User:
-    async with SessionLocal() as s:
-        user = User(
-            id=str(uuid.uuid4()), email=email, subscription_status="active", plan="pro"
-        )
-        s.add(user)
-        await s.commit()
-        await s.refresh(user)
-        return user
+def _make_user(email: str) -> str:
+    """Returns the new user's id. Backend-aware — see conftest.make_user."""
+    _, _, user_id = make_user(email)
+    return user_id
 
 
-async def _enqueue(user: User, charged: float = 1.0, frames: int = 1) -> str:
+async def _enqueue(user_id: str, charged: float = 1.0, frames: int = 1) -> str:
     async with SessionLocal() as s:
-        user = (await s.execute(select(User).where(User.id == user.id))).scalar_one()
+        user = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
         job = await create_job(
             s,
             user=user,
@@ -104,8 +100,8 @@ def test_interleaved_claims_are_exclusive(portal, client):
     predicate never runs. This interleaves the phases explicitly so the
     predicate is what decides the winner.
     """
-    user = portal.call(_make_user, f"race-{uuid.uuid4().hex[:8]}@example.com")
-    job_id = portal.call(_enqueue, user)
+    user_id = _make_user(f"race-{uuid.uuid4().hex[:8]}@example.com")
+    job_id = portal.call(_enqueue, user_id)
 
     async def _race():
         async with SessionLocal() as s1, SessionLocal() as s2:
@@ -132,8 +128,8 @@ def test_interleaved_claims_are_exclusive(portal, client):
 
 
 def test_sequential_claims_do_not_double_serve(portal, client):
-    user = portal.call(_make_user, f"claim-{uuid.uuid4().hex[:8]}@example.com")
-    job_id = portal.call(_enqueue, user)
+    user_id = _make_user(f"claim-{uuid.uuid4().hex[:8]}@example.com")
+    job_id = portal.call(_enqueue, user_id)
 
     async def _claim_twice():
         async with SessionLocal() as s1, SessionLocal() as s2:
@@ -147,8 +143,8 @@ def test_sequential_claims_do_not_double_serve(portal, client):
 
 
 def test_claimed_job_is_running_with_a_lease(portal, client):
-    user = portal.call(_make_user, f"lease-{uuid.uuid4().hex[:8]}@example.com")
-    job_id = portal.call(_enqueue, user)
+    user_id = _make_user(f"lease-{uuid.uuid4().hex[:8]}@example.com")
+    job_id = portal.call(_enqueue, user_id)
 
     async def _claim():
         async with SessionLocal() as s:
@@ -163,8 +159,8 @@ def test_claimed_job_is_running_with_a_lease(portal, client):
 
 def test_expired_lease_is_reclaimed(portal, client):
     """A runner that dies mid-flight must not strand the job forever."""
-    user = portal.call(_make_user, f"stale-{uuid.uuid4().hex[:8]}@example.com")
-    job_id = portal.call(_enqueue, user)
+    user_id = _make_user(f"stale-{uuid.uuid4().hex[:8]}@example.com")
+    job_id = portal.call(_enqueue, user_id)
 
     async def _claim_then_expire():
         async with SessionLocal() as s:
@@ -185,8 +181,8 @@ def test_expired_lease_is_reclaimed(portal, client):
 
 
 def test_unexpired_lease_is_not_stolen(portal, client):
-    user = portal.call(_make_user, f"hold-{uuid.uuid4().hex[:8]}@example.com")
-    portal.call(_enqueue, user)
+    user_id = _make_user(f"hold-{uuid.uuid4().hex[:8]}@example.com")
+    portal.call(_enqueue, user_id)
 
     async def _claim():
         async with SessionLocal() as s:
@@ -221,16 +217,16 @@ def test_failure_retries_then_gives_up_and_refunds(portal, client, monkeypatch):
 
     monkeypatch.setattr(app.llm, "analyze_with_fallback", _boom)
 
-    user = portal.call(_make_user, f"fail-{uuid.uuid4().hex[:8]}@example.com")
+    user_id = _make_user(f"fail-{uuid.uuid4().hex[:8]}@example.com")
 
     async def _charge():
         async with SessionLocal() as s:
-            u = (await s.execute(select(User).where(User.id == user.id))).scalar_one()
+            u = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
             u.minutes_used_month = 5.0
             await s.commit()
 
     portal.call(_charge)
-    job_id = portal.call(_enqueue, user, 2.0)
+    job_id = portal.call(_enqueue, user_id, 2.0)
 
     # Attempt 1 -> retryable, back to queued
     portal.call(run_one_job, settings)
@@ -244,7 +240,7 @@ def test_failure_retries_then_gives_up_and_refunds(portal, client, monkeypatch):
     assert job.status == STATUS_FAILED
     assert job.request_json is None, "payload should be released on terminal failure"
 
-    refreshed = portal.call(_get_user, user.id)
+    refreshed = portal.call(_get_user, user_id)
     assert refreshed.minutes_used_month == pytest.approx(3.0), "quota was not refunded"
 
 
@@ -258,16 +254,16 @@ def test_success_clears_payload_and_keeps_charge(portal, client, monkeypatch):
 
     monkeypatch.setattr(app.llm, "analyze_with_fallback", _ok)
 
-    user = portal.call(_make_user, f"ok-{uuid.uuid4().hex[:8]}@example.com")
+    user_id = _make_user(f"ok-{uuid.uuid4().hex[:8]}@example.com")
 
     async def _charge():
         async with SessionLocal() as s:
-            u = (await s.execute(select(User).where(User.id == user.id))).scalar_one()
+            u = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
             u.minutes_used_month = 5.0
             await s.commit()
 
     portal.call(_charge)
-    job_id = portal.call(_enqueue, user, 2.0)
+    job_id = portal.call(_enqueue, user_id, 2.0)
     portal.call(run_one_job, settings)
 
     job = portal.call(_get, job_id)
@@ -275,13 +271,13 @@ def test_success_clears_payload_and_keeps_charge(portal, client, monkeypatch):
     assert job.result_markdown == "# Report"
     assert job.request_json is None, "payload should be released after success"
 
-    refreshed = portal.call(_get_user, user.id)
+    refreshed = portal.call(_get_user, user_id)
     assert refreshed.minutes_used_month == pytest.approx(5.0), "successful work refunded"
 
 
 def test_public_dict_never_leaks_the_request_payload(portal, client):
-    user = portal.call(_make_user, f"leak-{uuid.uuid4().hex[:8]}@example.com")
-    job_id = portal.call(_enqueue, user, 1.0, 3)
+    user_id = _make_user(f"leak-{uuid.uuid4().hex[:8]}@example.com")
+    job_id = portal.call(_enqueue, user_id, 1.0, 3)
     job = portal.call(_get, job_id)
 
     body = job.public_dict()
