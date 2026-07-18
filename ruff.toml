@@ -1,0 +1,31 @@
+# Shared lint config for both Python packages (apps/api, packages/worker).
+#
+# Ruff walks up from each linted file until it finds a config, and only treats
+# a pyproject.toml as config if it has a [tool.ruff] section. Neither package's
+# pyproject declares one, so this root file governs both — one rule set, not
+# two that can drift.
+
+target-version = "py310"
+line-length = 88
+
+[lint]
+# Pinned explicitly rather than relying on ruff's defaults, so a future
+# narrowing of this list is a visible decision instead of a silent loss.
+#
+# F is load-bearing beyond the usual unused-import noise. F811
+# (redefinition-while-unused) is what catches a test function shadowing an
+# earlier one in the same module: Python silently keeps only the last
+# definition, so the earlier test stops running and the suite still reports
+# green with its coverage quietly deleted. That exact failure happened once
+# here — two concurrency tests written a session apart shared a name, and the
+# only symptom was a test count that looked one short. Removing F811, or
+# excluding tests/ from linting, would make that class of regression invisible
+# again.
+select = ["E4", "E7", "E9", "F"]
+
+# tests/ is deliberately NOT excluded. Test modules are exactly where
+# duplicate-definition shadowing hides, because nothing else reads them.
+[lint.per-file-ignores]
+# Test modules set up state through fixtures and helpers whose imports are
+# used indirectly; nothing here should weaken F811.
+"**/tests/**" = []
