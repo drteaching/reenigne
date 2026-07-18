@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +21,14 @@ from .auth import (
 )
 from .config import Settings, get_settings
 from .db import User, get_session, get_user_by_email, init_db, new_local_user_id
+from .jobs import (
+    count_active_jobs,
+    create_job,
+    get_job,
+    list_jobs,
+    run_job_by_id,
+    run_pending_jobs,
+)
 from .llm import analyze_with_fallback, transcribe_whisper
 from .stripe_billing import (
     apply_subscription_update,
@@ -102,6 +111,12 @@ class AnalyzeResponse(BaseModel):
 
 class CheckoutResponse(BaseModel):
     url: str
+
+
+class JobSubmitResponse(BaseModel):
+    job_id: str
+    status: str
+    poll_url: str
 
 
 # ---------- Auth ----------
@@ -304,24 +319,150 @@ async def transcribe(
     return {"segments": segments}
 
 
-@app.post("/v1/analyze", response_model=AnalyzeResponse)
+def _downsample_frames(frames: list, limit: int) -> list:
+    """Evenly sample across the session so the walkthrough keeps its shape."""
+    if len(frames) <= limit:
+        return frames
+    step = len(frames) / limit
+    return [frames[int(i * step)] for i in range(limit)]
+
+
+def _analysis_cost_minutes(duration_seconds: float) -> float:
+    return max(duration_seconds / 60.0 * 0.1, 0.1)
+
+
+@app.post(
+    "/v1/analyze/jobs",
+    response_model=JobSubmitResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def submit_analysis_job(
+    body: AnalyzeRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    """
+    Enqueue an analysis and return immediately.
+
+    The provider call runs out of band, so neither the request duration nor
+    the serverless execution limit bounds how long analysis may take.
+    """
+    require_active_subscription(user)
+    reset_usage_if_needed(user)
+    require_quota_remaining(user, settings)
+
+    if not body.frames:
+        raise HTTPException(status_code=400, detail="No frames supplied")
+
+    active = await count_active_jobs(session, str(user.id))
+    if active >= settings.job_max_active_per_user:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"You already have {active} analyses in progress "
+                f"(limit {settings.job_max_active_per_user}). "
+                "Wait for one to finish."
+            ),
+        )
+
+    frames = _downsample_frames(body.frames, settings.pro_max_frames_per_session)
+
+    # Debit at enqueue so queued work counts against quota; refunded by the
+    # runner if the job ultimately fails.
+    cost = _analysis_cost_minutes(body.duration_seconds)
+    user.minutes_used_month += cost
+
+    job = await create_job(
+        session,
+        user=user,
+        target=body.target,
+        duration_seconds=body.duration_seconds,
+        prompt_template=body.prompt_template,
+        model=body.model or settings.default_model,
+        frames=[f.model_dump() for f in frames],
+        charged_minutes=cost,
+    )
+
+    if settings.job_run_inline:
+        await run_job_by_id(settings, job.id)
+
+    return JobSubmitResponse(
+        job_id=job.id,
+        status=job.status,
+        poll_url=f"/v1/analyze/jobs/{job.id}",
+    )
+
+
+@app.get("/v1/analyze/jobs/{job_id}")
+async def get_analysis_job(
+    job_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+):
+    job = await get_job(session, job_id, str(user.id))
+    if job is None:
+        # 404 rather than 403 for another user's job — do not confirm it exists.
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job.public_dict()
+
+
+@app.get("/v1/analyze/jobs")
+async def list_analysis_jobs(
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+):
+    jobs = await list_jobs(session, str(user.id))
+    return {"jobs": [j.public_dict() for j in jobs]}
+
+
+@app.api_route("/v1/internal/jobs/run", methods=["GET", "POST"])
+async def run_jobs(
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    """
+    Drain the queue. Triggered by Vercel Cron or an external scheduler.
+
+    Authenticated by a shared secret rather than a user token — there is no
+    user in this context. Accepts GET as well as POST, and takes the secret
+    either as a bearer token or a custom header, because Vercel Cron issues a
+    GET with `Authorization: Bearer $CRON_SECRET` and cannot be configured to
+    do otherwise.
+    """
+    if not settings.job_runner_secret:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    supplied = request.headers.get("x-job-runner-secret", "")
+    if not supplied:
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            supplied = auth[7:]
+
+    # Constant-time: a plain == leaks the secret through timing.
+    if not secrets.compare_digest(supplied, settings.job_runner_secret):
+        raise HTTPException(status_code=401, detail="Invalid runner credentials")
+
+    return await run_pending_jobs(settings)
+
+
+@app.post("/v1/analyze", response_model=AnalyzeResponse, deprecated=True)
 async def analyze(
     body: AnalyzeRequest,
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ):
+    """
+    Deprecated: runs the provider call inside the request, so it can exceed
+    the serverless execution limit on anything but a small session. Kept for
+    older clients. New callers should use POST /v1/analyze/jobs.
+    """
     require_active_subscription(user)
     reset_usage_if_needed(user)
     require_quota_remaining(user, settings)
 
-    if len(body.frames) > settings.pro_max_frames_per_session:
-        # Evenly downsample server-side
-        step = len(body.frames) / settings.pro_max_frames_per_session
-        body.frames = [
-            body.frames[int(i * step)]
-            for i in range(settings.pro_max_frames_per_session)
-        ]
+    body.frames = _downsample_frames(body.frames, settings.pro_max_frames_per_session)
 
     try:
         markdown, features, model_used = await analyze_with_fallback(
@@ -335,7 +476,7 @@ async def analyze(
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
-    user.minutes_used_month += max(body.duration_seconds / 60.0 * 0.1, 0.1)
+    user.minutes_used_month += _analysis_cost_minutes(body.duration_seconds)
     await session.commit()
 
     return AnalyzeResponse(

@@ -10,6 +10,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # place, anyone can forge a token — startup refuses to boot in that state.
 INSECURE_SECRET_KEY = "change-me-in-production-use-long-random-string"
 
+# HS256 signs with SHA-256; a key shorter than the 32-byte hash output
+# weakens it (RFC 7518 §3.2).
+MIN_SECRET_KEY_BYTES = 32
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -52,6 +56,21 @@ class Settings(BaseSettings):
     # a missing env var must not hand out free subscriptions.
     enable_dev_endpoints: bool = False
 
+    # --- Analysis job queue ---
+    # Shared secret for POST /v1/internal/jobs/run, called by Vercel Cron or
+    # an external scheduler. Without it the trigger endpoint is disabled.
+    job_runner_secret: str = ""
+    # Run the job in-process straight after enqueue. Correct for local dev and
+    # long-running hosts; useless on serverless, where the process is frozen
+    # once the response is sent.
+    job_run_inline: bool = False
+    # How long a runner may hold a job before another may reclaim it. Must
+    # exceed the slowest realistic provider call.
+    job_lease_seconds: int = 900
+    job_max_attempts: int = 3
+    # Per-user cap on queued+running jobs, so one account cannot flood it.
+    job_max_active_per_user: int = 3
+
     cors_origins: str = (
         "https://reenigne.dev,https://www.reenigne.dev,"
         "http://localhost:3000,http://localhost:5173"
@@ -63,13 +82,24 @@ class Settings(BaseSettings):
 
     def validate_runtime(self) -> None:
         """Fail fast on configurations that are unsafe to serve traffic with."""
-        if not self.use_supabase and self.api_secret_key == INSECURE_SECRET_KEY:
-            raise RuntimeError(
-                "Refusing to start: Supabase Auth is not configured "
-                "(SUPABASE_URL + SUPABASE_JWT_SECRET) and API_SECRET_KEY is "
-                "still the built-in default, so JWTs would be forgeable. Set "
-                "one or the other."
-            )
+        if not self.use_supabase:
+            if self.api_secret_key == INSECURE_SECRET_KEY:
+                raise RuntimeError(
+                    "Refusing to start: Supabase Auth is not configured "
+                    "(SUPABASE_URL + SUPABASE_JWT_SECRET) and API_SECRET_KEY "
+                    "is still the built-in default, so JWTs would be "
+                    "forgeable. Set one or the other."
+                )
+            # RFC 7518 §3.2: an HS256 key shorter than the hash output
+            # weakens the signature. PyJWT warns; we refuse.
+            if len(self.api_secret_key.encode()) < MIN_SECRET_KEY_BYTES:
+                raise RuntimeError(
+                    f"Refusing to start: API_SECRET_KEY is too short "
+                    f"({len(self.api_secret_key.encode())} bytes, minimum "
+                    f"{MIN_SECRET_KEY_BYTES}). Generate one with: "
+                    f'python3 -c "import secrets; '
+                    f'print(secrets.token_urlsafe(48))"'
+                )
         if self.enable_dev_endpoints and self.stripe_secret_key:
             raise RuntimeError(
                 "Refusing to start: ENABLE_DEV_ENDPOINTS is on while Stripe is "

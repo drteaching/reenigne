@@ -87,6 +87,52 @@ Point Stripe to:
 
 ---
 
+## 4b. Analysis job runner
+
+`/v1/analyze/jobs` only enqueues. Something must trigger the runner, or jobs
+sit in `queued` forever.
+
+Apply the migration:
+
+```bash
+supabase db push   # or paste supabase/migrations/20260719_analysis_jobs.sql
+```
+
+Then set both of these in Vercel, to the **same** value:
+
+| Var | Why |
+|-----|-----|
+| `CRON_SECRET` | Vercel sends it as `Authorization: Bearer …` on cron requests |
+| `JOB_RUNNER_SECRET` | What the API compares against |
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+`apps/api/vercel.json` already registers the schedule:
+
+```json
+"crons": [{ "path": "/v1/internal/jobs/run", "schedule": "* * * * *" }]
+```
+
+Verify it works:
+
+```bash
+curl -X POST https://api.reenigne.dev/v1/internal/jobs/run \
+  -H "X-Job-Runner-Secret: $JOB_RUNNER_SECRET"
+# {"processed": 0, "job_ids": []}
+```
+
+> **Vercel Cron granularity.** Once per minute on Pro; **once per day** on
+> Hobby, which makes the queue unusable there. On Hobby, either point an
+> external scheduler at the same endpoint, or run the API on a long-running
+> host with `JOB_RUN_INLINE=true`.
+
+Leaving `JOB_RUNNER_SECRET` empty makes the endpoint return 404, so an
+unconfigured deploy cannot be drained by anyone who guesses the path.
+
+---
+
 ## 5. Desktop / CLI
 
 ```bash

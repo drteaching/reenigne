@@ -6,5 +6,6 @@
       "maxDuration": 300,
       "memory": 1024
     }
-  }
+  },
+  "crons": [{ "path": "/v1/internal/jobs/run", "schedule": "* * * * *" }]
 }

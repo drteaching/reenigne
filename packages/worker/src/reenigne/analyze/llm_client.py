@@ -126,15 +126,23 @@ def analyze_session(
                 "has no readable frame images."
             )
         print(
-            f"[analyze] Calling reenigne cloud API (model={model}, "
+            f"[analyze] Submitting to reenigne cloud API (model={model}, "
             f"{len(payload_frames)} frames, {payload_bytes / 1_000_000:.1f} MB)..."
         )
+
+        def _report(status: str, job: dict) -> None:
+            if status == "queued":
+                print("[analyze] Queued; waiting for a runner...")
+            elif status == "running":
+                print("[analyze] Analysis running...")
+
         return client.analyze(
             target=session.target,
             duration_seconds=session.duration_seconds,
             prompt_template=prompt_template,
             model=model,
             frames=payload_frames,
+            on_progress=_report,
         )
 
     # Dev-only local path (never used in production desktop builds)

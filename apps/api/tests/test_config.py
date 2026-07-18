@@ -55,10 +55,16 @@ def test_supabase_auth_does_not_need_the_local_secret(clean_env):
 def test_dev_endpoints_with_stripe_configured_is_refused(clean_env):
     with pytest.raises(RuntimeError, match="ENABLE_DEV_ENDPOINTS"):
         _settings(
-            api_secret_key="a-real-secret",
+            api_secret_key="a-sufficiently-long-random-secret-key",
             enable_dev_endpoints=True,
             stripe_secret_key="sk_live_abc123",
         ).validate_runtime()
+
+
+def test_short_secret_is_refused(clean_env):
+    """RFC 7518 wants >=32 bytes for HS256; PyJWT warns, we refuse."""
+    with pytest.raises(RuntimeError, match="too short"):
+        _settings(api_secret_key="short-key").validate_runtime()
 
 
 def test_dev_endpoints_default_off(clean_env):

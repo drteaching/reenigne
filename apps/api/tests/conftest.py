@@ -47,17 +47,32 @@ def settings():
 _counter = {"n": 0}
 
 
-@pytest.fixture
-def user(client):
-    """Register a fresh user and return (email, auth headers)."""
+def _register(client):
     _counter["n"] += 1
     email = f"user{_counter['n']}@example.com"
     resp = client.post(
         "/v1/auth/register", json={"email": email, "password": "hunter2hunter2"}
     )
     assert resp.status_code == 200, resp.text
-    token = resp.json()["access_token"]
-    return email, {"Authorization": f"Bearer {token}"}
+    return email, {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+@pytest.fixture
+def user(client):
+    """Register a fresh user and return (email, auth headers)."""
+    return _register(client)
+
+
+@pytest.fixture
+def other_user(client):
+    """
+    A second, distinct user.
+
+    Not derived from `user`: pytest caches fixtures per test, so requesting
+    `user` and `subscribed_user` together yields the same account — which
+    would silently make cross-user isolation tests pass for the wrong reason.
+    """
+    return _register(client)
 
 
 @pytest.fixture
