@@ -73,9 +73,14 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSCameraUsageDescription": "reenigne does not use the camera.",
-        "NSMicrophoneUsageDescription": "reenigne records microphone narration for product teardowns.",
-        "NSScreenCaptureDescription": "reenigne records your screen to capture product workflows."
-      }
+        "NSMicrophoneUsageDescription": "reenigne records microphone narration alongside your screen so the teardown can quote what you said.",
+        "NSScreenCaptureUsageDescription": "reenigne records your screen to capture the product workflow being analysed."
+      },
+      "binaries": [
+        "Contents/Resources/ffmpeg/ffmpeg",
+        "Contents/Resources/ffmpeg/ffprobe",
+        "Contents/Resources/worker/reenigne-worker"
+      ]
     },
     "win": {
       "target": [
