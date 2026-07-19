@@ -27,11 +27,11 @@ from sqlalchemy import (
     Text,
     Uuid,
     select,
-    update,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from . import queue
 from .config import Settings
 from .db import Base, SessionLocal, User, is_uuid
 from .stripe_billing import (
@@ -47,12 +47,12 @@ class EnqueueRejection(NamedTuple):
     detail: str
 
 
-# Terminal states never transition again.
-STATUS_QUEUED = "queued"
-STATUS_RUNNING = "running"
-STATUS_SUCCEEDED = "succeeded"
-STATUS_FAILED = "failed"
-TERMINAL_STATUSES = (STATUS_SUCCEEDED, STATUS_FAILED)
+# Re-exported from app.queue so both queues share one vocabulary.
+STATUS_QUEUED = queue.STATUS_QUEUED
+STATUS_RUNNING = queue.STATUS_RUNNING
+STATUS_SUCCEEDED = queue.STATUS_SUCCEEDED
+STATUS_FAILED = queue.STATUS_FAILED
+TERMINAL_STATUSES = queue.TERMINAL_STATUSES
 
 
 class AnalysisJob(Base):
@@ -315,72 +315,33 @@ async def count_active_jobs(
 
 
 def _runnable(now: float):
-    """A job is runnable if it is queued, or running with a dead runner."""
-    return (AnalysisJob.status == STATUS_QUEUED) | (
-        (AnalysisJob.status == STATUS_RUNNING) & (AnalysisJob.lease_expires_at < now)
-    )
+    """Kept as a thin alias; the predicate itself lives in app.queue."""
+    return queue.runnable_clause(AnalysisJob, now)
 
 
 async def select_claim_candidate(
     session: AsyncSession, now: float
 ) -> AnalysisJob | None:
-    """Oldest runnable job. Split out from the claim so the race is testable."""
-    result = await session.execute(
-        select(AnalysisJob)
-        .where(_runnable(now))
-        .order_by(AnalysisJob.created_at)
-        .limit(1)
-    )
-    return result.scalar_one_or_none()
+    return await queue.select_claim_candidate(session, AnalysisJob, now)
 
 
 async def try_claim(
     session: AsyncSession, job_id: str, now: float, lease_seconds: int
 ) -> bool:
-    """
-    Attempt to take ownership of a specific job. True if this caller won.
-
-    This is the concurrency guarantee. `select_claim_candidate` does not
-    provide one: two runners can read the same candidate before either
-    writes. Re-asserting the runnable predicate inside the UPDATE is what
-    makes exactly one of them win, since the database applies the two updates
-    serially and the loser no longer matches.
-    """
-    claimed = await session.execute(
-        update(AnalysisJob)
-        .where(AnalysisJob.id == job_id, _runnable(now))
-        .values(
-            status=STATUS_RUNNING,
-            lock_token=str(uuid.uuid4()),
-            lease_expires_at=now + lease_seconds,
-            attempts=AnalysisJob.attempts + 1,
-        )
-    )
-    await session.commit()
-    return claimed.rowcount == 1
+    return await queue.try_claim(session, AnalysisJob, job_id, now, lease_seconds)
 
 
 async def claim_next_job(
     session: AsyncSession, lease_seconds: int
 ) -> AnalysisJob | None:
     """
-    Atomically take ownership of one runnable job, or return None.
+    Atomically take ownership of one runnable analysis job.
 
-    Deliberately avoids `FOR UPDATE SKIP LOCKED` so the same code path works
-    on SQLite in tests.
+    The mechanics are shared with the feedback triage queue — see app.queue
+    for the correctness argument. Not duplicated here: it took two attempts to
+    get right on Postgres and a forked copy would drift.
     """
-    for _ in range(5):  # bounded retry when another runner wins the race
-        now = time.time()
-        candidate = await select_claim_candidate(session, now)
-        if candidate is None:
-            return None
-
-        if await try_claim(session, candidate.id, now, lease_seconds):
-            await session.refresh(candidate)
-            return candidate
-        # Someone else got it; look for another.
-
-    return None
+    return await queue.claim_next(session, AnalysisJob, lease_seconds)
 
 
 async def complete_job(
@@ -490,35 +451,8 @@ async def fail_job(
 async def claim_job_by_id(
     session: AsyncSession, job_id: str, lease_seconds: int
 ) -> AnalysisJob | None:
-    """Claim one specific job, if it is currently runnable."""
-    now = time.time()
-    token = str(uuid.uuid4())
-
-    claimed = await session.execute(
-        update(AnalysisJob)
-        .where(
-            AnalysisJob.id == job_id,
-            (AnalysisJob.status == STATUS_QUEUED)
-            | (
-                (AnalysisJob.status == STATUS_RUNNING)
-                & (AnalysisJob.lease_expires_at < now)
-            ),
-        )
-        .values(
-            status=STATUS_RUNNING,
-            lock_token=token,
-            lease_expires_at=now + lease_seconds,
-            attempts=AnalysisJob.attempts + 1,
-        )
-    )
-    await session.commit()
-    if claimed.rowcount != 1:
-        return None
-
-    result = await session.execute(
-        select(AnalysisJob).where(AnalysisJob.id == job_id)
-    )
-    return result.scalar_one_or_none()
+    """Claim one specific analysis job, if it is currently runnable."""
+    return await queue.claim_by_id(session, AnalysisJob, job_id, lease_seconds)
 
 
 async def _execute_claimed_job(
@@ -595,26 +529,68 @@ async def run_pending_jobs(
     mid-provider-call has already spent tokens that the retry spends again,
     and leaves the job to sit until its lease lapses.
     """
+    from .triage import FeedbackTriageJob, run_one_triage_job
+
     limit = settings.job_runner_batch_size if limit is None else limit
     if deadline is None:
         deadline = time.monotonic() + settings.job_runner_max_seconds
 
     processed: list[str] = []
+    kinds: list[str] = []
     stopped = "batch_limit"
 
     for _ in range(limit):
-        if deadline - time.monotonic() < settings.job_min_runway_seconds:
-            stopped = "insufficient_runway"
-            break
-        job_id = await run_one_job(settings)
-        if job_id is None:
+        runway = deadline - time.monotonic()
+
+        # Which queue holds the older runnable job? Global FIFO across both,
+        # rather than a fixed priority: with a batch size of 1 — the default
+        # on a capped platform — checking analysis first would starve triage
+        # for as long as any analysis work exists, and vice versa.
+        now = time.time()
+        async with SessionLocal() as peek:
+            analysis_at = await queue.peek_oldest_runnable_at(peek, AnalysisJob, now)
+            triage_at = await queue.peek_oldest_runnable_at(
+                peek, FeedbackTriageJob, now
+            )
+
+        candidates = []
+        if analysis_at is not None:
+            candidates.append((analysis_at, "analysis"))
+        if triage_at is not None:
+            candidates.append((triage_at, "triage"))
+        if not candidates:
             stopped = "queue_empty"
             break
+
+        _, kind = min(candidates, key=lambda c: c[0])
+
+        # Runway floors differ by type: a triage job is one text call measured
+        # in seconds, so holding it to the vision-sized floor would refuse to
+        # start it with minutes of budget left.
+        needed = (
+            settings.job_min_runway_seconds
+            if kind == "analysis"
+            else settings.triage_min_runway_seconds
+        )
+        if runway < needed:
+            stopped = "insufficient_runway"
+            break
+
+        job_id = (
+            await run_one_job(settings)
+            if kind == "analysis"
+            else await run_one_triage_job(settings)
+        )
+        if job_id is None:
+            # Claimed by another runner between the peek and the claim.
+            continue
         processed.append(job_id)
+        kinds.append(kind)
 
     return {
         "processed": len(processed),
         "job_ids": processed,
+        "kinds": kinds,
         "stopped": stopped,
         "runway_seconds": round(deadline - time.monotonic(), 1),
     }

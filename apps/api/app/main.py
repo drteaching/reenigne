@@ -44,6 +44,7 @@ from .jobs import (
     run_pending_jobs,
 )
 from .llm import analyze_with_fallback, transcribe_whisper
+from .triage import enqueue_triage
 from .stripe_billing import (
     StripeEvent,
     apply_subscription_update,
@@ -455,6 +456,9 @@ async def submit_feedback(
         context=context,
         ip_hash=ip_hash,
     )
+    # Triage runs out of band on the shared job runner. Never inline: it makes
+    # a provider call, and intake must stay fast and free.
+    await enqueue_triage(session, row.id)
     return FeedbackResponse(id=row.id, status=row.status)
 
 

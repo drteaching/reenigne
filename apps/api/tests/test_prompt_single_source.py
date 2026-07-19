@@ -113,6 +113,17 @@ def test_canonical_module_exposes_the_expected_templates():
         assert isinstance(text, str) and text.strip(), f"{name} is empty"
 
 
+def test_triage_prompt_is_exported_but_not_user_selectable():
+    """
+    PROMPTS is the allowlist /v1/analyze/jobs validates prompt_template
+    against. TRIAGE_PROMPT is an internal classifier; admitting it to that
+    dict would let a caller run it as an analysis template.
+    """
+    assert reenigne_prompts.TRIAGE_PROMPT.strip()
+    assert "triage" not in reenigne_prompts.PROMPTS
+    assert reenigne_prompts.TRIAGE_PROMPT not in reenigne_prompts.PROMPTS.values()
+
+
 def test_canonical_package_has_no_third_party_imports():
     """
     The worker must be able to import this without FastAPI, SQLAlchemy or a

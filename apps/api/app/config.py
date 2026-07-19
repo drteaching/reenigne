@@ -64,6 +64,23 @@ class Settings(BaseSettings):
     pro_max_frames_per_session: int = 60
     max_audio_upload_bytes: int = 100 * 1024 * 1024
 
+    # --- Feedback triage ---
+    # Text-only classification call. Cheapest capable model by default: this
+    # runs on every submission and reads no images.
+    triage_model: str = "gpt-4o-mini"
+    # Runway floor for a triage job. Far below the analysis floor because a
+    # triage call is one text request measured in seconds, not a vision call
+    # measured in minutes — reusing the analysis floor would refuse to start
+    # triage with several minutes of budget left.
+    triage_min_runway_seconds: int = 60
+
+    # --- GitHub issue filing ---
+    # Fine-grained PAT scoped to issues on one repo. The API calls no
+    # repo-contents endpoints. Unset means triage still runs and stores its
+    # result; nothing is filed and no external call is attempted.
+    github_feedback_token: str = ""
+    github_feedback_repo: str = ""  # "owner/name"
+
     # --- Feedback intake ---
     # Daily caps. Feedback is free and never touches quota or credits, so
     # these are the only thing standing between the endpoint and abuse.

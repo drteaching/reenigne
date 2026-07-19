@@ -20,6 +20,7 @@ from sqlalchemy import delete, select
 from app.config import get_settings
 from app.db import SessionLocal, User
 from app.jobs import STATUS_QUEUED, AnalysisJob, create_job, run_pending_jobs
+from app.triage import FeedbackTriageJob
 from conftest import make_user
 
 
@@ -33,6 +34,7 @@ def portal():
 
 async def _truncate_jobs():
     async with SessionLocal() as s:
+        await s.execute(delete(FeedbackTriageJob))
         await s.execute(delete(AnalysisJob))
         await s.commit()
 

@@ -230,3 +230,28 @@ async def transcribe_whisper(
             }
         )
     return segments
+
+
+async def call_text_model(
+    settings: Settings, *, system: str, user: str, model: str
+) -> str:
+    """
+    One text-only completion. Used by feedback triage.
+
+    Separate from analyze_with_fallback: that path builds multimodal content
+    and walks a provider chain sized for expensive vision work. Triage is a
+    cheap single call, and a fallback cascade on it would multiply the cost of
+    something that runs on every submission.
+    """
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY not configured on server")
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    resp = await client.chat.completions.create(
+        model=model,
+        max_tokens=2048,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return resp.choices[0].message.content or ""

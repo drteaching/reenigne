@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 
 from app.feedback import Feedback
 from app.db import SessionLocal
+from app.triage import FeedbackTriageJob
 from conftest import make_user
 
 
@@ -26,6 +27,7 @@ def portal():
 
 async def _clear_feedback():
     async with SessionLocal() as s:
+        await s.execute(delete(FeedbackTriageJob))
         await s.execute(delete(Feedback))
         await s.commit()
 

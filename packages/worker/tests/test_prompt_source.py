@@ -36,6 +36,11 @@ def test_prompts_import_needs_no_server_dependencies():
         )
 
 
+def test_triage_prompt_is_not_a_user_selectable_template():
+    """The worker validates --prompt against PROMPTS; triage is not one."""
+    assert "triage" not in reenigne_prompts.PROMPTS
+
+
 def test_templates_are_present_and_non_empty():
     assert set(reenigne_prompts.PROMPTS) == {
         "teardown",
