@@ -90,10 +90,11 @@ export function DownloadPicker() {
             Windows{win && <span className="mono small muted"> · detected</span>}
           </h2>
           <p className="small muted" style={{ marginBottom: "0.75rem" }}>
-            x64 installer. Windows 10 or later.
+            Not available yet. The recorder is built for macOS first, and the
+            Windows build needs its own capture path before it is worth shipping.
           </p>
           <p className="mono small" style={{ margin: 0, color: "var(--signal-ink)" }}>
-            .exe — not yet published
+            .exe — no date yet
           </p>
         </div>
       </div>

@@ -30,5 +30,5 @@ export const PRO_FEATURES: readonly string[] = [
   "Whisper transcription",
   "Grok teardown (OpenAI + Claude fallback)",
   "Self-contained HTML reports",
-  "Mac (Intel + Apple Silicon) & Windows",
+  "Mac (Intel + Apple Silicon)",
 ];

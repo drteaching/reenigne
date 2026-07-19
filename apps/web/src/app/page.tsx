@@ -36,7 +36,7 @@ export default function HomePage() {
 
         <div className="btn-row" style={{ margin: "1.75rem 0 2.5rem" }}>
           <Link href="/download" className="btn primary">
-            Download for Mac &amp; Windows
+            Download for Mac
           </Link>
           <Link href="/sample-report" className="btn">
             Read a sample report

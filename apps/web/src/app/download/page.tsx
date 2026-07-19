@@ -5,7 +5,7 @@ import { DownloadPicker } from "@/components/DownloadPicker";
 export const metadata: Metadata = {
   title: "Download",
   description:
-    "reenigne for macOS (Apple Silicon and Intel) and Windows x64. Record locally; analysis runs on our servers with a subscription.",
+    "reenigne for macOS (Apple Silicon and Intel). Record locally; analysis runs on our servers with a subscription.",
 };
 
 export default function DownloadPage() {
@@ -15,7 +15,7 @@ export default function DownloadPage() {
       <h1>Get reenigne</h1>
       <p className="lede">
         The desktop app records, extracts frames and runs the pipeline. macOS universal
-        (Apple Silicon and Intel) and Windows x64.
+        (Apple Silicon and Intel). Windows is not available yet.
       </p>
 
       <DownloadPicker />
