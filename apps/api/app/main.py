@@ -43,7 +43,7 @@ from .jobs import (
     run_job_by_id,
     run_pending_jobs,
 )
-from .llm import analyze_with_fallback, transcribe_whisper
+from .llm import UnknownModel, analyze_with_fallback, provider_for, transcribe_whisper
 from .ratelimit import check_rate_limit
 from .triage import enqueue_triage
 from .stripe_billing import (
@@ -564,6 +564,14 @@ async def submit_analysis_job(
     if not body.frames:
         raise HTTPException(status_code=400, detail="No frames supplied")
 
+    # Validated here, not when the runner claims the job. A bad model should
+    # be a 400 the caller sees now, rather than a job that queues, gets
+    # claimed, and dies against the provider minutes later.
+    try:
+        provider_for(body.model or settings.default_model, settings)
+    except UnknownModel as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     frames = _downsample_frames(body.frames, settings.pro_max_frames_per_session)
 
     # Quota checks, the minutes debit and the insert all happen inside one
@@ -664,6 +672,11 @@ async def analyze(
     require_active_subscription(user)
     reset_usage_if_needed(user)
     require_quota_remaining(user, settings)
+
+    try:
+        provider_for(body.model or settings.default_model, settings)
+    except UnknownModel as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     body.frames = _downsample_frames(body.frames, settings.pro_max_frames_per_session)
 

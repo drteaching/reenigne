@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     xai_api_key: str = ""
 
+    # The model allowlist. resolve_model_chain maps id -> provider from these
+    # alone; anything else is rejected at submit time rather than guessed at
+    # by substring. Changing a model id here is the whole upgrade path.
+    grok_model: str = "grok-4"
+    openai_model: str = "gpt-4o"
+    anthropic_model: str = "claude-sonnet-4-5"
+    openai_mini_model: str = "gpt-4o-mini"
+
     default_model: str = "grok-4"
     fallback_models: str = "gpt-4o,claude-sonnet-4-5"
 

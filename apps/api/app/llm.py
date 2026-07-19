@@ -141,28 +141,65 @@ async def call_claude(
     return resp.content[0].text
 
 
+class UnknownModel(ValueError):
+    """A requested model is not in the allowlist."""
+
+
+def model_registry(settings: Settings) -> dict[str, str]:
+    """
+    The single model id -> provider map.
+
+    Replaces substring guessing ("claude" in the name means Anthropic), which
+    silently mis-routed anything unrecognised to OpenAI: a typo like "gpt4o"
+    became a live OpenAI call that failed at the provider with an opaque
+    error, and a hypothetical "grok-claude-mix" would have gone to Anthropic
+    on a coincidence.
+
+    Built from settings so the ids are configurable in one place, and shared
+    with the triage path (see provider_for) so a misconfigured TRIAGE_MODEL
+    cannot be sent to the wrong provider either.
+    """
+    return {
+        settings.grok_model: "grok",
+        settings.openai_model: "openai",
+        settings.anthropic_model: "anthropic",
+        settings.openai_mini_model: "openai",
+    }
+
+
+def provider_for(model: str, settings: Settings) -> str:
+    """Provider for one model id. Raises UnknownModel if not allowlisted."""
+    registry = model_registry(settings)
+    provider = registry.get((model or "").strip())
+    if provider is None:
+        raise UnknownModel(
+            f"Unknown model {model!r}. Available: "
+            f"{', '.join(sorted(registry))}."
+        )
+    return provider
+
+
 def resolve_model_chain(requested: str, settings: Settings) -> list[tuple[str, str]]:
     """
-    Return ordered list of (provider, model_id).
-    provider in: grok | openai | anthropic
+    Ordered [(provider, model_id)] — the requested model, then fallbacks.
+
+    Raises UnknownModel for anything outside the allowlist so a bad value is
+    rejected at submit time rather than guessed at.
     """
     requested = (requested or settings.default_model).strip()
-    chain: list[tuple[str, str]] = []
+    chain: list[tuple[str, str]] = [(provider_for(requested, settings), requested)]
 
-    def classify(m: str) -> tuple[str, str]:
-        ml = m.lower()
-        if "claude" in ml:
-            return "anthropic", m
-        if "grok" in ml:
-            return "grok", m
-        return "openai", m
-
-    chain.append(classify(requested))
     for fb in settings.fallback_models.split(","):
         fb = fb.strip()
         if not fb:
             continue
-        item = classify(fb)
+        # A misconfigured fallback must not take down a valid request, so an
+        # unknown one is skipped rather than raised on. The requested model is
+        # the user's input and is validated strictly; fallbacks are ours.
+        try:
+            item = (provider_for(fb, settings), fb)
+        except UnknownModel:
+            continue
         if item not in chain:
             chain.append(item)
     return chain
@@ -277,6 +314,15 @@ async def call_text_model(
     cheap single call, and a fallback cascade on it would multiply the cost of
     something that runs on every submission.
     """
+    # Routed through the same registry as analysis. Previously this assumed
+    # OpenAI, so setting TRIAGE_MODEL to a Claude id would have sent an
+    # Anthropic model name to OpenAI and failed confusingly.
+    provider = provider_for(model, settings)
+    if provider != "openai":
+        raise RuntimeError(
+            f"TRIAGE_MODEL={model!r} routes to {provider}, but triage only "
+            f"supports OpenAI-compatible chat completions today."
+        )
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY not configured on server")
     client = AsyncOpenAI(api_key=settings.openai_api_key)
