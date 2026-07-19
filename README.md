@@ -1,8 +1,8 @@
 # reenigne
 
-> Record once. Reverse-engineer anything.
+> Record a walkthrough. Get the teardown.
 
-**reenigne** is a cross-platform desktop product that records screen + narration, auto-captures screenshots, transcribes commentary, and produces a professional reverse-engineering report via cloud AI (Grok primary; OpenAI & Anthropic fallback).
+**reenigne** is a cross-platform desktop product for competitive product research. It records screen + narration, auto-captures screenshots, transcribes commentary, and produces a structured teardown report via cloud AI (Grok primary; OpenAI & Anthropic fallback).
 
 - **Site:** [reenigne.dev](https://reenigne.dev) — marketing, pricing, downloads  
 - **Desktop:** Screen Studio–style app for **macOS universal** (Apple Silicon + Intel) and **Windows x64**  

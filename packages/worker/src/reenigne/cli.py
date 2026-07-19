@@ -89,7 +89,7 @@ def process(session_dir, force, no_ocr):
     type=click.Choice(["teardown", "ux", "features", "tech-stack"]),
 )
 def analyze(session_dir, model, prompt):
-    """Send session bundle to cloud LLM for reverse-engineering."""
+    """Send session bundle to the cloud API for teardown analysis."""
     cfg = Config.from_env()
     cmd_analyze(Path(session_dir), cfg, model=model, prompt=prompt)
     click.secho(

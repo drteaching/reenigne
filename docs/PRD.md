@@ -12,7 +12,7 @@
 ## 1. Product Summary
 
 ### 1.1 One-Liner
-> A cross-platform desktop tool that records screen + narration, auto-captures screenshots, transcribes commentary, and hands the bundle to an LLM to produce a professional reverse-engineering report of any website or software.
+> A cross-platform desktop tool that records screen + narration, auto-captures screenshots, transcribes commentary, and hands the bundle to an LLM to produce a structured teardown report of any website or software.
 
 ### 1.2 Problem
 Product teams, indie hackers, and consultants routinely study competitor products by clicking through them and taking notes. This process is:
@@ -25,7 +25,7 @@ Product teams, indie hackers, and consultants routinely study competitor product
 Record once. reenigne handles capture, transcription, and LLM-powered synthesis. Output: a structured teardown report, ready to inform your own product build.
 
 ### 1.4 Target Users
-- **Indie founders / solopreneurs** cloning-with-improvement
+- **Indie founders / solopreneurs** studying incumbents before building
 - **Product managers** doing competitive analysis
 - **UX researchers** cataloguing patterns
 - **AI builders** studying incumbents before entering a space

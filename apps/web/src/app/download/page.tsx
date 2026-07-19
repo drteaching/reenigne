@@ -1,59 +1,49 @@
+import type { Metadata } from "next";
 import Link from "next/link";
-import { SiteNav } from "@/components/SiteNav";
+import { DownloadPicker } from "@/components/DownloadPicker";
 
-const RELEASES =
-  process.env.NEXT_PUBLIC_RELEASES_URL ||
-  "https://github.com/reenigne/reenigne/releases/latest";
+export const metadata: Metadata = {
+  title: "Download",
+  description:
+    "reenigne for macOS (Apple Silicon and Intel) and Windows x64. Record locally; analysis runs on our servers with a subscription.",
+};
 
 export default function DownloadPage() {
   return (
-    <div className="page">
-      <SiteNav />
-      <section className="section">
-        <h3>Download reenigne</h3>
+    <div className="wrap section">
+      <p className="eyebrow">Download</p>
+      <h1>Get reenigne</h1>
+      <p className="lede">
+        The desktop app records, extracts frames and runs the pipeline. macOS universal
+        (Apple Silicon and Intel) and Windows x64.
+      </p>
+
+      <DownloadPicker />
+
+      <hr className="sprocket" style={{ margin: "3rem 0 2rem" }} />
+
+      <h2>Before you record</h2>
+      <div className="stack" style={{ maxWidth: "62ch" }}>
         <p>
-          Universal macOS (Apple Silicon + Intel) and Windows x64. No API keys in the
-          installer — sign in after install.
+          <strong>macOS</strong> asks for Screen Recording and Microphone permission the
+          first time. Both live in System Settings › Privacy &amp; Security; the app has
+          to be restarted after granting them.
         </p>
-        <div className="pricing" style={{ marginTop: "2rem" }}>
-          <div className="price-card featured">
-            <strong>macOS</strong>
-            <p style={{ color: "var(--muted)" }}>
-              Universal binary · macOS 12+ · Screen Recording + Microphone permission
-              required
-            </p>
-            <a
-              className="btn primary"
-              href={`${RELEASES}/download/reenigne-mac-universal.dmg`}
-              style={{ marginTop: "1rem" }}
-            >
-              Download .dmg
-            </a>
-          </div>
-          <div className="price-card">
-            <strong>Windows</strong>
-            <p style={{ color: "var(--muted)" }}>Windows 10/11 x64 · NSIS installer</p>
-            <a
-              className="btn primary"
-              href={`${RELEASES}/download/reenigne-win-x64.exe`}
-              style={{ marginTop: "1rem" }}
-            >
-              Download .exe
-            </a>
-          </div>
-        </div>
-        <p style={{ color: "var(--muted)", marginTop: "2rem" }}>
-          All releases:{" "}
-          <a href={RELEASES} style={{ color: "var(--accent)" }}>
-            GitHub Releases
-          </a>
-          . Prefer CLI?{" "}
-          <Link href="/docs" style={{ color: "var(--accent)" }}>
-            See docs
-          </Link>
-          .
+        <p>
+          <strong>ffmpeg</strong> is bundled with the packaged app. If you run the CLI
+          from source you will need it on your PATH.
         </p>
-      </section>
+        <p className="muted">
+          Recording third-party software may be restricted by that product&rsquo;s terms
+          of service. Check before you record something you do not own.
+        </p>
+      </div>
+
+      <h2 style={{ marginTop: "2.5rem" }}>Prefer the command line?</h2>
+      <p>
+        The same pipeline runs from a terminal. See the{" "}
+        <Link href="/docs">quickstart</Link>.
+      </p>
     </div>
   );
 }

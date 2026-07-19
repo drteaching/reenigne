@@ -1,32 +1,28 @@
-import Link from "next/link";
-import { SiteNav } from "@/components/SiteNav";
+import type { Metadata } from "next";
 import { FeedbackForm } from "@/components/FeedbackForm";
 
-export const metadata = {
-  title: "Feedback — reenigne",
+export const metadata: Metadata = {
+  title: "Feedback",
   description: "Report a bug or suggest an improvement to reenigne.",
 };
 
 export default function FeedbackPage() {
   return (
-    <div className="page">
-      <SiteNav />
-      <section className="section">
-        <h3>Feedback</h3>
-        <p>
-          Found a bug, or want something reenigne doesn’t do yet? Tell us. You
-          don’t need an account — reports from this page are anonymous unless
-          you’re signed in.
-        </p>
-        <p className="muted" style={{ fontSize: "0.85rem" }}>
-          Every report is read. Recordings, screenshots and transcripts are
-          never attached to feedback — only what you type here.
-        </p>
+    <div className="wrap section">
+      <p className="eyebrow">Feedback</p>
+      <h1>Tell us what broke</h1>
+      <p className="lede">
+        Or what is missing. You do not need an account — reports from this page are
+        anonymous unless you are signed in. Every one is read.
+      </p>
+      <p className="small muted" style={{ maxWidth: "60ch" }}>
+        Recordings, screenshots and transcripts are never attached to feedback; only
+        what you type here. Reports are triaged automatically and may become a public
+        issue, with credentials and email addresses stripped first.
+      </p>
+      <div style={{ marginTop: "2rem", maxWidth: "40rem" }}>
         <FeedbackForm />
-      </section>
-      <footer className="footer">
-        <Link href="/">← reenigne</Link>
-      </footer>
+      </div>
     </div>
   );
 }

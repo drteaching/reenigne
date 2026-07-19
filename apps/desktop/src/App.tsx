@@ -287,10 +287,10 @@ export default function App() {
               )}
 
               <div className="hero-record">
-                <h1>Record once. Reverse-engineer anything.</h1>
+                <h1>Record a walkthrough. Get the teardown.</h1>
                 <p>
-                  Capture screen + narration while you explore a product. reenigne builds a
-                  structured teardown report with Grok.
+                  Capture screen and narration while you explore a product. reenigne builds a
+                  structured teardown report.
                 </p>
                 <input
                   className="target-input"
