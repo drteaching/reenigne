@@ -91,6 +91,28 @@ async def get_current_user(
     return user
 
 
+async def get_current_user_optional(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(bearer)
+    ],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> User | None:
+    """
+    Resolve the caller if a valid token is present, else None.
+
+    For endpoints open to both signed-in and anonymous use (feedback intake).
+    A malformed or expired token yields None rather than 401 — the anonymous
+    path is legitimate, so a bad token should degrade to it rather than
+    bouncing someone trying to report a bug.
+    """
+    if credentials is None:
+        return None
+    try:
+        return await get_current_user(credentials, session)
+    except HTTPException:
+        return None
+
+
 def require_active_subscription(user: User) -> None:
     if user.subscription_status not in ("active", "trialing"):
         raise HTTPException(

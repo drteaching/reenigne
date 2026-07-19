@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     pro_max_frames_per_session: int = 60
     max_audio_upload_bytes: int = 100 * 1024 * 1024
 
+    # --- Feedback intake ---
+    # Daily caps. Feedback is free and never touches quota or credits, so
+    # these are the only thing standing between the endpoint and abuse.
+    feedback_max_per_user_per_day: int = 5
+    feedback_max_per_ip_per_day: int = 3
+
     # Opt-in only. Never infer "this is dev" from another key being unset —
     # a missing env var must not hand out free subscriptions.
     enable_dev_endpoints: bool = False

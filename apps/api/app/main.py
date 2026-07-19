@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 import secrets
+import uuid as uuid_module
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,12 +19,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .auth import (
     create_access_token,
     get_current_user,
+    get_current_user_optional,
     hash_password,
     require_active_subscription,
     verify_password,
 )
 from .config import Settings, get_settings
 from .db import User, get_session, get_user_by_email, init_db, new_local_user_id
+from .feedback import (
+    MAX_DESCRIPTION,
+    MAX_LOGS_EXCERPT,
+    MAX_TITLE,
+    SecretDetected,
+    count_recent,
+    create_feedback,
+    hash_ip,
+    scan_for_secrets,
+)
 from .jobs import (
     enqueue_analysis,
     get_job,
@@ -129,6 +141,31 @@ class JobSubmitResponse(BaseModel):
     job_id: str
     status: str
     poll_url: str
+
+
+class FeedbackContext(BaseModel):
+    app_version: str = Field(default="", max_length=64)
+    platform: str = Field(default="", max_length=64)
+    os: str = Field(default="", max_length=128)
+    # Only ever populated behind an explicit second opt-in in the clients.
+    # Never recordings, frames or transcripts.
+    logs_excerpt: str = Field(default="", max_length=MAX_LOGS_EXCERPT)
+
+
+class FeedbackRequest(BaseModel):
+    kind: Literal["bug", "improvement"]
+    title: str = Field(min_length=1, max_length=MAX_TITLE)
+    description: str = Field(min_length=1, max_length=MAX_DESCRIPTION)
+    context: FeedbackContext | None = None
+    # Honeypot. Real clients leave this empty; a bot fills every field it
+    # sees. Filled submissions are acked and dropped, so the bot learns
+    # nothing from the response.
+    website: str = Field(default="", max_length=256)
+
+
+class FeedbackResponse(BaseModel):
+    id: str
+    status: str
 
 
 # ---------- Auth ----------
@@ -348,6 +385,77 @@ async def stripe_webhook(
 
     await session.commit()
     return {"received": True}
+
+
+# ---------- Feedback ----------
+
+
+@app.post(
+    "/v1/feedback",
+    response_model=FeedbackResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def submit_feedback(
+    body: FeedbackRequest,
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    user: Annotated[User | None, Depends(get_current_user_optional)] = None,
+):
+    """
+    Accept a bug report or improvement suggestion.
+
+    Open to anonymous submissions from the public site, so the guards here are
+    the only thing between this endpoint and abuse: per-source daily caps, a
+    honeypot, hard length limits, and rejection of anything credential-shaped.
+
+    Free by design — this path never reads or writes quota, credits or any
+    billing state. Charging for a bug report suppresses the reports we most
+    want to receive.
+    """
+    # Honeypot: ack exactly as a success would, and drop it. Any difference in
+    # status or shape teaches a bot which field to leave alone next time.
+    if body.website.strip():
+        return FeedbackResponse(id=str(uuid_module.uuid4()), status="received")
+
+    context = body.context.model_dump() if body.context else {}
+    try:
+        scan_for_secrets(
+            body.title, body.description, context.get("logs_excerpt", "")
+        )
+    except SecretDetected as e:
+        raise HTTPException(status_code=400, detail=e.guidance)
+
+    client_ip = request.client.host if request.client else None
+    ip_hash = hash_ip(client_ip, settings)
+
+    if user is not None:
+        used = await count_recent(session, user_id=str(user.id))
+        limit = settings.feedback_max_per_user_per_day
+    else:
+        used = await count_recent(session, ip_hash=ip_hash)
+        limit = settings.feedback_max_per_ip_per_day
+
+    if used >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"You have submitted {used} reports in the last 24 hours "
+                f"(limit {limit}). Thank you — please try again tomorrow, or "
+                f"add detail to an existing report instead."
+            ),
+        )
+
+    row = await create_feedback(
+        session,
+        user_id=str(user.id) if user else None,
+        kind=body.kind,
+        title=body.title,
+        description=body.description,
+        context=context,
+        ip_hash=ip_hash,
+    )
+    return FeedbackResponse(id=row.id, status=row.status)
 
 
 # ---------- Gated AI proxies ----------
