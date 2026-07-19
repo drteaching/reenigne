@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     default_model: str = "grok-4"
     fallback_models: str = "gpt-4o,claude-sonnet-4-5"
 
+    # Transcription model. Must be one that returns segment timestamps: the
+    # worker aligns narration to frames by segment start/end, so a model
+    # without them silently destroys the alignment that makes reports
+    # specific. See TRANSCRIPTION_MODELS_WITH_SEGMENTS in app/llm.py.
+    transcription_model: str = "whisper-1"
+
     # Stripe
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""

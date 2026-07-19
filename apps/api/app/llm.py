@@ -204,18 +204,52 @@ async def analyze_with_fallback(
     raise RuntimeError("All LLM providers failed: " + " | ".join(errors))
 
 
+# Transcription models that support `verbose_json` and therefore
+# `timestamp_granularities=["segment"]`.
+#
+# As of openai-python 2.46 the SDK's generated docs state that for
+# `gpt-4o-transcribe` and `gpt-4o-mini-transcribe` "the only supported format
+# is `json`", and `gpt-4o-transcribe-diarize` supports only `json`, `text` and
+# `diarized_json`. None of them can return segment timestamps, so none can
+# replace whisper-1 here without breaking frame alignment.
+#
+# Revisit when OpenAI ships a newer model that supports verbose_json; add it
+# here and the setting can move.
+TRANSCRIPTION_MODELS_WITH_SEGMENTS = frozenset({"whisper-1"})
+
+
 async def transcribe_whisper(
     settings: Settings, audio_bytes: bytes, filename: str
 ) -> list[dict]:
+    """
+    Transcribe audio into timestamped segments.
+
+    The segment contract is load-bearing: align_transcript_to_frames matches
+    each segment's start time to the frame that was on screen, and that
+    alignment is what lets a report cite the frame behind an observation. A
+    model that returns only a flat string would leave every narration line
+    attached to nothing.
+    """
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY not configured on server")
+
+    model = settings.transcription_model
+    if model not in TRANSCRIPTION_MODELS_WITH_SEGMENTS:
+        # Fail loudly at the call rather than returning segment-less output
+        # that would quietly misalign every narration line.
+        raise RuntimeError(
+            f"TRANSCRIPTION_MODEL={model!r} does not return segment "
+            f"timestamps. Frame alignment depends on them. Supported: "
+            f"{', '.join(sorted(TRANSCRIPTION_MODELS_WITH_SEGMENTS))}."
+        )
+
     client = AsyncOpenAI(api_key=settings.openai_api_key)
     import io
 
     bio = io.BytesIO(audio_bytes)
     bio.name = filename
     response = await client.audio.transcriptions.create(
-        model="whisper-1",
+        model=model,
         file=bio,
         response_format="verbose_json",
         timestamp_granularities=["segment"],
