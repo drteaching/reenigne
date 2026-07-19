@@ -110,6 +110,20 @@ def handle(method: str, params: dict, cfg: Config):
         path = cmd_report(session_dir, fmt=params.get("format", "html"))
         return {"path": str(path)}
 
+    if method == "tail_log":
+        # Last N lines of the worker's own log, for the desktop's optional
+        # diagnostics attachment. Never touches recordings, frames or
+        # transcripts — only this process's log file.
+        lines = min(int(params.get("lines", 100)), 500)
+        log_path = cfg.output_root / "worker.log"
+        if not log_path.exists():
+            return ""
+        try:
+            tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return ""
+        return "\n".join(tail[-lines:])
+
     if method == "list_sessions":
         root = Path(params.get("output_root") or cfg.output_root).expanduser()
         if not root.exists():

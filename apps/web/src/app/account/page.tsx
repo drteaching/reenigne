@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { SiteNav } from "@/components/SiteNav";
+import { FeedbackForm } from "@/components/FeedbackForm";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "https://api.reenigne.dev";
 

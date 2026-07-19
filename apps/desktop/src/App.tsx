@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-type Tab = "record" | "sessions" | "account";
+// Kept in step with package.json at build time by scripts/package-desktop.sh.
+const APP_VERSION = "0.2.0";
+
+type Tab = "record" | "sessions" | "account" | "feedback";
 type Step = "idle" | "recording" | "process" | "analyze" | "report" | "done" | "error";
 
 type Me = {
@@ -38,6 +41,16 @@ export default function App() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [fbKind, setFbKind] = useState<"bug" | "improvement">("bug");
+  const [fbTitle, setFbTitle] = useState("");
+  const [fbBody, setFbBody] = useState("");
+  const [fbDiagnostics, setFbDiagnostics] = useState(true);
+  // Second, separate opt-in. Logs can contain paths and product names the
+  // user may not want to share, so attaching them is never implied by the
+  // first checkbox.
+  const [fbLogs, setFbLogs] = useState(false);
+  const [fbState, setFbState] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [fbMessage, setFbMessage] = useState("");
 
   const subscribed = useMemo(
     () => me?.subscription_status === "active" || me?.subscription_status === "trialing",
@@ -171,6 +184,51 @@ export default function App() {
     }
   }
 
+  async function sendFeedback() {
+    setFbState("sending");
+    setFbMessage("");
+
+    // Only ever version/platform/OS, and — behind the second checkbox — the
+    // tail of the worker log. Never recordings, frames or transcripts.
+    const context: Record<string, string> = {};
+    if (fbDiagnostics) {
+      context.app_version = APP_VERSION;
+      context.platform = navigator.platform || "unknown";
+      context.os = navigator.userAgent;
+    }
+    if (fbDiagnostics && fbLogs) {
+      try {
+        context.logs_excerpt = String(
+          await window.reenigne.workerRpc("tail_log", { lines: 100 })
+        ).slice(0, 10000);
+      } catch {
+        /* log unavailable; send without it */
+      }
+    }
+
+    const res = await window.reenigne.apiFetch("/v1/feedback", "POST", {
+      kind: fbKind,
+      title: fbTitle,
+      description: fbBody,
+      context,
+    });
+
+    if (res.status >= 200 && res.status < 300) {
+      setFbState("sent");
+      setFbTitle("");
+      setFbBody("");
+      return;
+    }
+    setFbState("error");
+    // The API explains rejections (a detected secret, a rate limit) in terms
+    // the user can act on. Show that, not a generic failure.
+    setFbMessage(
+      typeof res.data === "object" && res.data && "detail" in (res.data as object)
+        ? String((res.data as { detail: string }).detail)
+        : "Could not send. Please try again."
+    );
+  }
+
   async function checkout() {
     const res = await window.reenigne.apiFetch("/v1/billing/checkout", "POST");
     if (res.status === 200 && res.data && typeof res.data === "object") {
@@ -201,6 +259,12 @@ export default function App() {
           </button>
           <button className={tab === "account" ? "active" : ""} onClick={() => setTab("account")}>
             Account
+          </button>
+          <button
+            className={tab === "feedback" ? "active" : ""}
+            onClick={() => setTab("feedback")}
+          >
+            Feedback
           </button>
           <div style={{ flex: 1 }} />
           {subscribed ? (
@@ -311,6 +375,107 @@ export default function App() {
                 ))}
                 {sessions.length === 0 && <li className="muted">No sessions yet.</li>}
               </ul>
+            </div>
+          )}
+
+          {tab === "feedback" && (
+            <div className="panel">
+              <h2>Feedback</h2>
+              {fbState === "sent" ? (
+                <>
+                  <p>
+                    <strong>Thank you.</strong> Your report was received and
+                    will be triaged automatically.
+                  </p>
+                  <button className="btn" onClick={() => setFbState("idle")}>
+                    Send another
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="row" style={{ gap: 8, marginBottom: 12 }}>
+                    <button
+                      className={fbKind === "bug" ? "btn primary" : "btn"}
+                      onClick={() => setFbKind("bug")}
+                    >
+                      Report a bug
+                    </button>
+                    <button
+                      className={fbKind === "improvement" ? "btn primary" : "btn"}
+                      onClick={() => setFbKind("improvement")}
+                    >
+                      Suggest an improvement
+                    </button>
+                  </div>
+
+                  <input
+                    className="target-input"
+                    placeholder="One-line summary"
+                    maxLength={200}
+                    value={fbTitle}
+                    onChange={(e) => setFbTitle(e.target.value)}
+                  />
+                  <textarea
+                    className="target-input"
+                    rows={7}
+                    maxLength={5000}
+                    placeholder={
+                      fbKind === "bug"
+                        ? "What did you do, what happened, and what did you expect?"
+                        : "What would you like to be able to do?"
+                    }
+                    value={fbBody}
+                    onChange={(e) => setFbBody(e.target.value)}
+                  />
+                  <p className="muted" style={{ fontSize: "0.75rem" }}>
+                    {fbBody.length} / 5000 · Don’t include API keys or tokens —
+                    submissions containing them are rejected.
+                  </p>
+
+                  <label className="row" style={{ gap: 8, marginTop: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={fbDiagnostics}
+                      onChange={(e) => setFbDiagnostics(e.target.checked)}
+                    />
+                    <span>Attach diagnostic info (app version, platform, OS)</span>
+                  </label>
+
+                  {fbDiagnostics && (
+                    <label className="row" style={{ gap: 8, marginLeft: 24 }}>
+                      <input
+                        type="checkbox"
+                        checked={fbLogs}
+                        onChange={(e) => setFbLogs(e.target.checked)}
+                      />
+                      <span>
+                        Also attach the last 100 lines of the worker log. May
+                        contain file paths and product names you’ve recorded.
+                      </span>
+                    </label>
+                  )}
+
+                  <p className="muted" style={{ fontSize: "0.75rem", marginTop: 8 }}>
+                    Recordings, screenshots and transcripts are never attached.
+                  </p>
+
+                  {fbState === "error" && (
+                    <p style={{ color: "#ff8080" }}>{fbMessage}</p>
+                  )}
+
+                  <div className="row" style={{ marginTop: 12 }}>
+                    <button
+                      className="btn primary"
+                      disabled={
+                        fbState === "sending" || !fbTitle.trim() || !fbBody.trim()
+                      }
+                      onClick={sendFeedback}
+                    >
+                      {fbState === "sending" ? "Sending…" : "Send"}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           )}
 

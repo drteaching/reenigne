@@ -198,6 +198,40 @@ class CloudClient:
         return self.wait_for_analysis(job_id, on_progress=on_progress)
 
 
+    def submit_feedback(
+        self,
+        *,
+        kind: str,
+        title: str,
+        description: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Send a bug report or improvement suggestion.
+
+        Works signed-out too — the endpoint accepts anonymous submissions —
+        so this does not check entitlements first.
+        """
+        payload = {
+            "kind": kind,
+            "title": title,
+            "description": description,
+            "context": context or {},
+        }
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(
+                f"{self.base_url}/v1/feedback",
+                headers=headers,
+                content=json.dumps(payload),
+            )
+        if resp.status_code >= 400:
+            raise CloudAPIError(_detail(resp) or "Feedback failed", resp.status_code)
+        return resp.json()
+
+
 def _detail(resp: "httpx.Response") -> str:
     """Pull FastAPI's {"detail": ...} out of an error body when present."""
     try:

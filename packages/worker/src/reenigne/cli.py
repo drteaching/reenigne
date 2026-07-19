@@ -142,5 +142,65 @@ def pipeline(target, output, model, prompt, interval):
     )
 
 
+@main.command()
+@click.option(
+    "--kind",
+    type=click.Choice(["bug", "improvement"]),
+    default=None,
+    help="Skip the prompt and set the kind directly.",
+)
+@click.option("--title", default=None, help="Skip the prompt and set the title.")
+def feedback(kind, title):
+    """Report a bug or suggest an improvement."""
+    from .cloud import CloudAPIError, CloudClient
+
+    cfg = Config.from_env()
+    client = CloudClient(cfg.api_base_url, cfg.api_token or "")
+
+    kind = kind or click.prompt(
+        "What kind of feedback",
+        type=click.Choice(["bug", "improvement"]),
+        default="bug",
+    )
+    title = title or click.prompt("One-line summary")
+    click.echo("Describe it (finish with an empty line):")
+    lines = []
+    while True:
+        line = click.prompt("", default="", show_default=False, prompt_suffix="  ")
+        if not line.strip():
+            break
+        lines.append(line)
+    description = "\n".join(lines).strip()
+    if not description:
+        click.secho("Nothing to send — a description is required.", fg="red")
+        raise SystemExit(1)
+
+    context = {}
+    if click.confirm("Attach app version and OS?", default=True):
+        import platform as _platform
+
+        context = {
+            "app_version": __version__,
+            "platform": _platform.system().lower(),
+            "os": _platform.platform(),
+        }
+
+    if not cfg.api_token:
+        click.secho("Not signed in — submitting anonymously.", fg="yellow")
+
+    try:
+        result = client.submit_feedback(
+            kind=kind, title=title, description=description, context=context
+        )
+    except CloudAPIError as e:
+        # The API explains rejections (a detected secret, a rate limit) in
+        # terms the submitter can act on; show that rather than a stack trace.
+        click.secho(f"\nNot submitted: {e}", fg="red")
+        raise SystemExit(1)
+
+    click.secho(f"\nThanks — submitted ({result.get('id', '')}).", fg="green")
+    click.echo("It will be triaged automatically. No recordings were attached.")
+
+
 if __name__ == "__main__":
     main()
