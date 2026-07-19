@@ -99,10 +99,24 @@ def _denied(*a, **kw):
     )
 
 
+def _denied_preflight(system="Darwin"):
+    """
+    Run a denial through preflight with the host OS pinned.
+
+    The advice is platform-specific — only macOS has a System Settings pane to
+    send someone to — so these tests must state which platform they are
+    asserting about. Reading the real host would make them pass or fail on the
+    machine rather than on the code, which is how the macOS assertion below
+    initially slipped through a Linux CI run.
+    """
+    with patch("reenigne.capture.preflight.platform.system", return_value=system):
+        with patch("reenigne.capture.preflight.shutil.which", return_value="/x/ffmpeg"):
+            with patch("reenigne.capture.preflight.subprocess.run", side_effect=_denied):
+                return preflight()
+
+
 def test_permission_denial_is_distinguished_from_missing_ffmpeg():
-    with patch("reenigne.capture.preflight.shutil.which", return_value="/x/ffmpeg"):
-        with patch("reenigne.capture.preflight.subprocess.run", side_effect=_denied):
-            result = preflight()
+    result = _denied_preflight("Darwin")
 
     assert result["ffmpeg_found"] is True, "ffmpeg exists; only access was refused"
     assert result["screen_ok"] is False
@@ -110,11 +124,17 @@ def test_permission_denial_is_distinguished_from_missing_ffmpeg():
     assert "System Settings" in result["errors"][0]["message"]
 
 
-def test_permission_denial_message_does_not_tell_the_user_to_reinstall():
+def test_denial_advice_outside_macos_does_not_name_a_macos_pane():
+    """No System Settings on Linux; sending someone there is a dead end."""
+    message = _denied_preflight("Linux")["errors"][0]["message"]
+    assert "System Settings" not in message
+    assert "restart" in message.lower(), "must still name the fix"
+
+
+@pytest.mark.parametrize("system", ["Darwin", "Linux", "Windows"])
+def test_permission_denial_message_does_not_tell_the_user_to_reinstall(system):
     """Wrong fix for this failure; reinstalling changes nothing."""
-    with patch("reenigne.capture.preflight.shutil.which", return_value="/x/ffmpeg"):
-        with patch("reenigne.capture.preflight.subprocess.run", side_effect=_denied):
-            message = preflight()["errors"][0]["message"].lower()
+    message = _denied_preflight(system)["errors"][0]["message"].lower()
     assert "reinstall" not in message
 
 
