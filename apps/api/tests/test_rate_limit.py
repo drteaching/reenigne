@@ -56,16 +56,25 @@ def test_failed_password_still_consumes_an_attempt(client):
     assert _login(client).status_code == 429
 
 
+@pytest.mark.sqlite_only
 def test_register_burst_is_refused(client):
+    """
+    sqlite_only: completing a registration inserts straight into profiles,
+    which the auth.users foreign key forbids on the Supabase schema. The
+    limiter itself is backend-independent — the login tests cover it on both.
+    """
     for _ in range(3):
         assert _register(client).status_code in (200, 400)
     assert _register(client).status_code == 429
 
 
+@pytest.mark.sqlite_only
 def test_login_and_register_have_separate_allowances(client):
     """
     Exhausting one route must not lock the other: a user who mistyped their
     password three times can still create an account.
+
+    sqlite_only for the same reason as the burst test above.
     """
     for _ in range(3):
         _login(client)

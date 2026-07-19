@@ -124,6 +124,28 @@ async def call_openai(
     return resp.choices[0].message.content or ""
 
 
+def first_text_block(blocks: Any) -> str:
+    """
+    The first text block of an Anthropic response.
+
+    Indexing content[0].text assumes the first block is text, which is only
+    reliably true today. A response may lead with a thinking block, a
+    tool_use block, or any future block type, and content[0].text would then
+    raise AttributeError mid-analysis — losing a completed, already-paid-for
+    vision call to a crash in the last line of the adapter.
+    """
+    for block in blocks or []:
+        if getattr(block, "type", None) == "text":
+            text = getattr(block, "text", None)
+            if text is not None:
+                return text
+
+    kinds = [getattr(b, "type", "?") for b in (blocks or [])]
+    raise RuntimeError(
+        f"Anthropic response contained no text block (types: {kinds or 'none'})"
+    )
+
+
 async def call_claude(
     settings: Settings, system: str, content: list[dict], model: str
 ) -> str:
@@ -138,7 +160,7 @@ async def call_claude(
         system=system,
         messages=[{"role": "user", "content": _to_anthropic_content(content)}],
     )
-    return resp.content[0].text
+    return first_text_block(resp.content)
 
 
 class UnknownModel(ValueError):
