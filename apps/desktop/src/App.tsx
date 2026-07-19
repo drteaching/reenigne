@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { SetupPanel, usePermissionStatus } from "./SetupPanel";
 
 // Kept in step with package.json at build time by scripts/package-desktop.sh.
 const APP_VERSION = "0.2.0";
@@ -29,6 +30,7 @@ function formatTimer(seconds: number) {
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("record");
+  const { status: permStatus, needsSetup, refresh: refreshPerms } = usePermissionStatus();
   const [target, setTarget] = useState("");
   const [step, setStep] = useState<Step>("idle");
   const [elapsed, setElapsed] = useState(0);
@@ -128,6 +130,16 @@ export default function App() {
       setError("Sign in to continue.");
       return;
     }
+    // Only a definite refusal blocks. "not-determined" is allowed through on
+    // purpose: on macOS the capture attempt is the only thing that raises the
+    // screen-recording prompt, so refusing to start would leave the user
+    // permanently unable to grant it.
+    if (permStatus?.screen === "denied" || permStatus?.microphone === "denied") {
+      setError(
+        "macOS is blocking screen or microphone access. Use the setup panel above to grant it."
+      );
+      return;
+    }
     try {
       setElapsed(0);
       setStep("recording");
@@ -137,7 +149,8 @@ export default function App() {
       setSessionDir(rec.session_dir);
     } catch (err) {
       setStep("error");
-      setError(err instanceof Error ? err.message : String(err));
+      setError(await explainCaptureFailure(err));
+      void refreshPerms();
     }
   }
 
@@ -182,6 +195,27 @@ export default function App() {
       setStep("error");
       setError(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  /**
+   * Turn a worker exception into something the user can act on.
+   *
+   * The raw message is a Python traceback from a subprocess: accurate and
+   * useless. The two failures that actually happen at first launch — no
+   * bundled ffmpeg, and macOS refusing the capture — have completely
+   * different fixes, so we ask preflight which one it was rather than
+   * guessing from the traceback text.
+   */
+  async function explainCaptureFailure(err: unknown): Promise<string> {
+    const raw = err instanceof Error ? err.message : String(err);
+    try {
+      const res = (await window.reenigne.workerRpc("preflight")) as PreflightResult;
+      if (res.errors.length > 0) return res.errors[0].message;
+    } catch {
+      // Preflight itself failed; fall through to the raw message rather than
+      // replacing a real error with a diagnostic one.
+    }
+    return raw;
   }
 
   async function sendFeedback() {
@@ -284,6 +318,10 @@ export default function App() {
                     Upgrade
                   </button>
                 </div>
+              )}
+
+              {permStatus && needsSetup && (
+                <SetupPanel status={permStatus} onChanged={refreshPerms} />
               )}
 
               <div className="hero-record">

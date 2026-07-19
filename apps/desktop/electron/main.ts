@@ -7,6 +7,7 @@ import {
   ipcMain,
   shell,
   dialog,
+  systemPreferences,
 } from "electron";
 import * as path from "path";
 import * as fs from "fs";
@@ -52,6 +53,11 @@ function workerCommand(): { cmd: string; args: string[]; env: NodeJS.ProcessEnv 
     REENIGNE_API_URL: API_URL,
     REENIGNE_API_TOKEN: readStore().token || "",
     PATH: process.env.PATH || "",
+    // Tells the worker ffmpeg is supposed to be bundled, so a missing binary
+    // is reported as a broken install rather than advising `brew install
+    // ffmpeg` — which would put an unsigned copy on PATH and reintroduce the
+    // misattributed capture prompt.
+    ...(isDev() ? {} : { REENIGNE_BUNDLED: "1" }),
   };
 
   // Prefer bundled ffmpeg on PATH for worker
@@ -222,6 +228,45 @@ function registerIpc() {
 
   ipcMain.handle("shell:open", (_e, p: string) => shell.openPath(p));
   ipcMain.handle("shell:external", (_e, url: string) => shell.openExternal(url));
+
+  // macOS TCC state, re-read on every call. Deliberately not cached and not
+  // persisted: permissions are revocable in System Settings at any time, so a
+  // stored "we already onboarded them" flag would hide a broken install.
+  ipcMain.handle("perm:status", () => {
+    if (process.platform !== "darwin") {
+      return { platform: process.platform, microphone: "granted", screen: "granted" };
+    }
+    return {
+      platform: "darwin",
+      microphone: systemPreferences.getMediaAccessStatus("microphone"),
+      screen: systemPreferences.getMediaAccessStatus("screen"),
+    };
+  });
+
+  // Microphone has a real request API, so use it: the prompt is raised by the
+  // app process and attributes to the app identity by construction, with no
+  // capture involved. Screen recording has no equivalent — the only way to
+  // provoke that prompt is to actually attempt a capture, which is what the
+  // worker's preflight does.
+  ipcMain.handle("perm:request-microphone", async () => {
+    if (process.platform !== "darwin") return true;
+    try {
+      return await systemPreferences.askForMediaAccess("microphone");
+    } catch {
+      return false;
+    }
+  });
+
+  // Deep links to the two panes. Opening the exact pane matters: "Privacy &
+  // Security" is a long list and Screen Recording is well down it.
+  ipcMain.handle("perm:open-settings", (_e, pane: "screen" | "microphone") => {
+    if (process.platform !== "darwin") return false;
+    const url =
+      pane === "screen"
+        ? "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        : "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
+    return shell.openExternal(url);
+  });
 
   ipcMain.handle("dialog:permissions", async () => {
     if (process.platform === "darwin") {

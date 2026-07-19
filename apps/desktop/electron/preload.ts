@@ -12,4 +12,8 @@ contextBridge.exposeInMainWorld("reenigne", {
   openPath: (p: string) => ipcRenderer.invoke("shell:open", p),
   openExternal: (url: string) => ipcRenderer.invoke("shell:external", url),
   showPermissionsHelp: () => ipcRenderer.invoke("dialog:permissions"),
+  permStatus: () => ipcRenderer.invoke("perm:status"),
+  requestMicrophone: () => ipcRenderer.invoke("perm:request-microphone"),
+  openPermissionSettings: (pane: "screen" | "microphone") =>
+    ipcRenderer.invoke("perm:open-settings", pane),
 });

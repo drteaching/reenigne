@@ -307,3 +307,32 @@ input {
   border: 1px solid rgba(240, 180, 41, 0.35);
   background: rgba(240, 180, 41, 0.08);
 }
+
+/* First-run permission setup (Record tab) */
+.setup-panel {
+  border-left: 3px solid var(--accent, #c8352a);
+  margin-bottom: 18px;
+}
+.perm-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+}
+.perm-list li + li {
+  margin-top: 12px;
+}
+.small {
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+.ok-note {
+  margin: 0;
+}
+.detail-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 11px;
+  opacity: 0.8;
+}
