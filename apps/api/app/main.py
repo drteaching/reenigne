@@ -44,6 +44,7 @@ from .jobs import (
     run_pending_jobs,
 )
 from .llm import analyze_with_fallback, transcribe_whisper
+from .ratelimit import check_rate_limit
 from .triage import enqueue_triage
 from .stripe_billing import (
     StripeEvent,
@@ -180,9 +181,16 @@ async def health():
 @app.post("/v1/auth/register", response_model=TokenResponse)
 async def register(
     body: RegisterRequest,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ):
+    check_rate_limit(
+        request,
+        settings,
+        bucket="register",
+        limit=settings.auth_rate_limit_per_minute,
+    )
     if settings.use_supabase:
         try:
             token = await supabase_signup(settings, body.email, body.password)
@@ -209,9 +217,18 @@ async def register(
 @app.post("/v1/auth/login", response_model=TokenResponse)
 async def login(
     body: LoginRequest,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ):
+    # Counted before the password is checked, so a wrong guess costs the
+    # attacker an attempt rather than being free.
+    check_rate_limit(
+        request,
+        settings,
+        bucket="login",
+        limit=settings.auth_rate_limit_per_minute,
+    )
     if settings.use_supabase:
         try:
             token = await supabase_login(settings, body.email, body.password)

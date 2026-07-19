@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     github_feedback_token: str = ""
     github_feedback_repo: str = ""  # "owner/name"
 
+    # --- Auth rate limiting ---
+    # Per address, per minute, per route. Best-effort only: the window is in
+    # process memory, so it does not survive a cold start or span instances.
+    # See app/ratelimit.py for why that trade was made.
+    auth_rate_limit_per_minute: int = 5
+
     # --- Feedback intake ---
     # Daily caps. Feedback is free and never touches quota or credits, so
     # these are the only thing standing between the endpoint and abuse.

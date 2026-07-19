@@ -39,6 +39,10 @@ os.environ.update(
         # blocking portals). asyncpg connections belong to the loop that
         # opened them, so pooling must be off or reuse across loops raises.
         "DB_NULL_POOL": "true",
+        # The suite registers many users through the real endpoint; the
+        # production 5/min cap would fail unrelated tests. test_rate_limit.py
+        # lowers it deliberately for the cases that exercise it.
+        "AUTH_RATE_LIMIT_PER_MINUTE": "100000",
     }
 )
 
@@ -125,6 +129,19 @@ def _schema():
     with start_blocking_portal() as portal:
         portal.call(_reset)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """
+    The limiter's window is process-global, so one test's requests would
+    otherwise count against the next.
+    """
+    from app.ratelimit import reset
+
+    reset()
+    yield
+    reset()
 
 
 @pytest.fixture(scope="session")
