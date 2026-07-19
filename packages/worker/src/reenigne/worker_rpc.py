@@ -110,6 +110,13 @@ def handle(method: str, params: dict, cfg: Config):
         path = cmd_report(session_dir, fmt=params.get("format", "html"))
         return {"path": str(path)}
 
+    if method == "preflight":
+        # Structured, never raising: the desktop renders this directly to
+        # decide whether to show the first-run panel and what it should say.
+        from .capture.preflight import preflight
+
+        return preflight()
+
     if method == "tail_log":
         # Last N lines of the worker's own log, for the desktop's optional
         # diagnostics attachment. Never touches recordings, frames or

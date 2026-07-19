@@ -2,23 +2,45 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import subprocess
 from typing import List
 
 
+class FfmpegMissing(RuntimeError):
+    """ffmpeg could not be found. Carries advice that fits how it was run."""
+
+
 def find_ffmpeg() -> str:
-    """Locate ffmpeg binary. Raises if not found."""
+    """
+    Locate the ffmpeg binary. Raises FfmpegMissing if absent.
+
+    The advice differs by context. Inside the packaged desktop app ffmpeg is
+    bundled, so its absence is a broken install and "brew install ffmpeg" is
+    the wrong instruction — it would put a second, unsigned copy on PATH,
+    which is exactly the arrangement that misattributes the macOS capture
+    prompt. REENIGNE_BUNDLED marks that case; the desktop app sets it.
+    """
     ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        raise RuntimeError(
-            "ffmpeg not found on PATH. Install it:\n"
-            "  macOS:   brew install ffmpeg\n"
-            "  Windows: winget install ffmpeg  (or scoop install ffmpeg)\n"
-            "  Linux:   apt-get install ffmpeg  (or your distro's package)"
+    if ffmpeg is not None:
+        return ffmpeg
+
+    if os.environ.get("REENIGNE_BUNDLED"):
+        raise FfmpegMissing(
+            "The bundled ffmpeg is missing, so reenigne cannot record. "
+            "Reinstall the app. Do not install ffmpeg separately — a copy on "
+            "PATH is not signed with the app and macOS will attribute the "
+            "recording prompt to it instead of to reenigne."
         )
-    return ffmpeg
+
+    raise FfmpegMissing(
+        "ffmpeg not found on PATH. Install it:\n"
+        "  macOS:   brew install ffmpeg\n"
+        "  Windows: winget install ffmpeg  (or scoop install ffmpeg)\n"
+        "  Linux:   apt-get install ffmpeg  (or your distro's package)"
+    )
 
 
 def get_platform_capture_args(
